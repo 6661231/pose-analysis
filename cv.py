@@ -343,7 +343,7 @@ class VideoBatchProcessor:
                 try:
                     shutil.move(str(out_path), str(tmp_path))
                     subprocess.run(
-                        ['ffmpeg', '-i', str(tmp_path), '-c:v', 'libx264', '-preset', 'fast', '-y', str(out_path)],
+                        ['ffmpeg', '-i', str(tmp_path), '-c:v', 'libx264', '-crf', '28', '-preset', 'fast', '-movflags', '+faststart', '-y', str(out_path)],
                         capture_output=True, timeout=60
                     )
                     tmp_path.unlink(missing_ok=True)

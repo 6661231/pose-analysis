@@ -337,6 +337,21 @@ async def delete_file(file_id: str):
     return {"status": "deleted", "file_id": file_id}
 
 
+@app.delete("/files")
+async def delete_all_files():
+    """删除所有记录及关联文件"""
+    storage_mgr.sync_from_disk()
+    records = storage_mgr.list_all_records()
+    count = 0
+    for r in records:
+        storage_mgr.delete_by_file_id(r.file_id)
+        rpt = storage_mgr.base_dir / "reports" / f"{r.file_id}_report.json"
+        if rpt.exists():
+            rpt.unlink()
+        count += 1
+    return {"status": "deleted", "count": count}
+
+
 @app.get("/progress/{task_id}")
 async def progress_stream(task_id: str):
     """SSE 端点：推送视频分析实时进度"""

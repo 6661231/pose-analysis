@@ -6,6 +6,8 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 import logging
 
+from pose_engine import KineticChainAnalyzer
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,12 +37,12 @@ class PoseReportGenerator:
         offsets: Dict[str, float],
         keypoints: np.ndarray
     ):
-        """添加单帧分析数据"""
+        """添加单帧分析数据（自动清洗 NaN）"""
         self.frames.append(FrameMetrics(
             frame_idx=frame_idx,
             timestamp_sec=round(timestamp, 3),
-            joint_angles={k: round(v, 2) for k, v in angles.items()},
-            limb_offsets={k: round(v, 4) for k, v in offsets.items()},
+            joint_angles={k: round(v, 2) if v == v else 0.0 for k, v in angles.items()},
+            limb_offsets={k: round(v, 4) if v == v else 0.0 for k, v in offsets.items()},
             keypoints=np.nan_to_num(keypoints, nan=0.0).tolist()
         ))
 
@@ -174,33 +176,39 @@ class PoseReportGenerator:
         # 异常检测
         anomalies = self._anomaly_detection(angle_series, timestamps)
 
-        # 综合评分（示例算法：基于肩髋对称性）
-        symmetry_score = 100.0
-        if "shoulder_height_diff_px" in offset_series:
-            diffs = [v for v in offset_series["shoulder_height_diff_px"] if not np.isnan(v)]
-            if diffs:
-                avg_diff = np.mean(diffs)
-                symmetry_score -= min(avg_diff / 3.0, 40)  # 每 3 像素扣 10 分，上限 40
+        # ===== 动力链分析（新算法 V3）=====
+        keypoints_all = [np.array(f.keypoints) for f in self.frames]
+        kca = KineticChainAnalyzer(angle_series, timestamps, keypoints_all)
+        chain_result = kca.full_assessment()
+
+        # 角速度时序（供前端画图）
+        velocity_series = {}
+        for joint in ["right_hip", "right_knee", "right_ankle", "right_shoulder", "right_elbow", "right_wrist"]:
+            if joint in kca.velocities:
+                velocity_series[joint] = kca.velocities[joint]
 
         report = {
             "report_meta": {
                 "generated_at": datetime.now().isoformat(),
-                "version": "1.0.0",
-                "engine": "YOLOv8-Pose + atan2_float64",
+                "version": "3.0.0",
+                "engine": "YOLOv8-Pose + KineticChain V3",
                 "total_frames": len(self.frames),
                 "duration_sec": round(timestamps[-1] - timestamps[0], 2) if len(timestamps) > 1 else 0
             },
             "video_info": video_info or {},
             "summary": {
-                "symmetry_score": round(max(0, symmetry_score), 1),
+                "overall_score": chain_result["overall_score"],
+                "dimensions": chain_result["dimensions"],
                 "anomaly_count": len(anomalies),
                 "action_phase_count": len(phases)
             },
+            "chain_details": chain_result["chain_details"],
+            "velocity_series": velocity_series,
             "joint_statistics": joint_stats,
             "offset_statistics": offset_stats,
             "action_phases": phases,
             "anomalies": anomalies,
-            "frame_data": [asdict(f) for f in self.frames]  # 逐帧明细（可选，数据量大时可关闭）
+            "frame_data": [asdict(f) for f in self.frames]
         }
 
         return report
