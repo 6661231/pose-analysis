@@ -54,6 +54,7 @@ class YOLOv8PoseDetector:
         self.conf_threshold = conf_threshold
         self.kpt_conf_threshold = kpt_conf_threshold
         self.inference_size = inference_size
+        torch.set_num_threads(1)  # 防止 CPU 推理占满核心导致 SSE/API 无响应
 
         if not Path(model_path).exists():
             logger.warning(f"[Detector] 本地未找到 {model_path}，将自动下载...")

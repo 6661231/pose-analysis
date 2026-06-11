@@ -300,7 +300,8 @@ function finishProgress(cb){targetProgress=100;stepProgress();setTimeout(()=>{if
 // Tabs
 dom.tabs.forEach(tab=>{tab.addEventListener('click',()=>{dom.tabs.forEach(t=>t.classList.remove('active'));tab.classList.add('active');dom.panels.forEach(p=>p.classList.remove('active'));$('#panel-'+tab.dataset.tab).classList.add('active');if(tab.dataset.tab==='history')loadHistory()})});
 
-async function checkHealth(){try{const r=await fetch('/health');if(r.ok){dom.statusIndicator.innerHTML='在线';dom.statusIndicator.style.color='var(--green)'}}catch(e){dom.statusIndicator.innerHTML='离线';dom.statusIndicator.style.color='var(--red)'}}
+let healthFails=0;
+async function checkHealth(){try{const r=await fetch('/health');if(r.ok){healthFails=0;dom.statusIndicator.innerHTML='在线';dom.statusIndicator.style.color='var(--green)'}}catch(e){healthFails++;if(healthFails>=2){dom.statusIndicator.innerHTML='离线';dom.statusIndicator.style.color='var(--red)'}}}
 
 // Upload
 dom.uploadZone.addEventListener('click',()=>dom.fileInput.click());
@@ -331,12 +332,15 @@ function handleUpload(file){
             }).catch(()=>{showToast('获取结果失败','error');resetUpload()})}
           }catch(e){}
         };
-        es.onerror=()=>{showToast('进度连接断开','error');resetUpload()};
+        let sseErr=0;
+        es.onerror=()=>{sseErr++;if(sseErr>=3){es.close();showToast('网络不稳定，请重试','error');resetUpload()}else{dom.progressStatus.textContent='连接重试('+sseErr+'/3)...'}};
       }else{showToast('失败: '+(d.message||d.detail||'错误'),'error');resetUpload()}
       }catch(e){showToast('解析失败','error');resetUpload()}
     }else{try{showToast('失败: '+JSON.parse(xhr.responseText).detail,'error')}catch(e){showToast('HTTP '+xhr.status,'error')}resetUpload()}
   });
-  xhr.addEventListener('error',()=>{showToast('网络错误','error');resetUpload()});
+  xhr.addEventListener('error',()=>{showToast('上传失败，请检查网络后重试','error');resetUpload()});
+  xhr.addEventListener('timeout',()=>{showToast('上传超时','error');resetUpload()});
+  xhr.timeout=120000;
   xhr.send(fd);
 }
 function resetUpload(){dom.progressSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');if(progressTimer)cancelAnimationFrame(progressTimer)}
