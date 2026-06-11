@@ -152,11 +152,14 @@ async def upload_video(file: UploadFile = File(...)):
     # 归档骨骼视频
     skeleton_stored_path = None
     if task.status == "success" and task.output_skeleton_path:
-        skeleton_stored_path = storage_mgr.store_skeleton_video(
-            task.output_skeleton_path,
-            related_file_id=stored.file_id,
-            overwrite=True
-        )
+        if task.output_skeleton_path.exists() and task.output_skeleton_path.stat().st_size > 0:
+            skeleton_stored_path = storage_mgr.store_skeleton_video(
+                task.output_skeleton_path,
+                related_file_id=stored.file_id,
+                overwrite=True
+            )
+        else:
+            logger.warning(f"[API] 骨骼视频文件无效或为空: {task.output_skeleton_path}")
 
     # 生成并保存 JSON 报告
     report_path = None

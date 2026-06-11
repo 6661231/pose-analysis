@@ -305,7 +305,7 @@ class VideoBatchProcessor:
 
             # 输出路径：使用 file_id 命名，便于后续存入 StorageManager
             out_path = out_dir / f"{task.file_id}_skeleton.mp4"
-            fourcc = cv2.VideoWriter_fourcc(*"avc1")
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(str(out_path), fourcc, self.extractor.target_fps, (width, height))
 
             processed = 0
