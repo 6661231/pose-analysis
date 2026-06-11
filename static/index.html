@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pose Analysis</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f5f5f7;--surface:#fff;--text:#1d1d1f;--text-secondary:#86868b;--text-tertiary:#aeaeb2;
+  --accent:#0071e3;--accent-hover:#0077ed;--green:#34c759;--orange:#ff9500;--red:#ff3b30;
+  --border:rgba(0,0,0,0.06);--shadow-sm:0 1px 3px rgba(0,0,0,0.04);
+  --shadow-md:0 4px 16px rgba(0,0,0,0.06);--shadow-lg:0 12px 40px rgba(0,0,0,0.08);
+  --radius:16px;--radius-lg:22px;--transition:0.3s cubic-bezier(0.25,0.1,0.25,1);
+  --font:-apple-system,BlinkMacSystemFont,'SF Pro Display','PingFang SC','Microsoft YaHei',sans-serif;
+}
+html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased}
+body{
+  font-family:var(--font);background:var(--bg);color:var(--text);
+  min-height:100vh;overflow-x:hidden;line-height:1.5;
+  background-image:radial-gradient(ellipse at 50% 0%,#e8e8ed 0%,#f5f5f7 60%);
+}
+.app-container{max-width:1040px;margin:0 auto;padding:0 24px 80px}
+.header{position:sticky;top:0;z-index:100;backdrop-filter:saturate(180%) blur(20px);background:rgba(245,245,247,0.8);border-bottom:1px solid var(--border);padding:0 24px;margin:0 -24px 40px}
+.header-inner{max-width:1040px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;height:52px}
+.header-brand{display:flex;align-items:center;gap:10px}
+.header-logo{width:32px;height:32px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:600}
+.header-title{font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.header-subtitle{font-size:11px;color:var(--text-tertiary)}
+.nav-tabs{display:flex;gap:2px;background:rgba(0,0,0,0.04);border-radius:10px;padding:3px}
+.nav-tab{background:transparent;border:none;color:var(--text-secondary);font-family:var(--font);font-size:13px;font-weight:500;padding:6px 20px;border-radius:8px;cursor:pointer;transition:all 0.2s}
+.nav-tab:hover{color:var(--text)}.nav-tab.active{background:#fff;color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,0.08)}
+.status-dot{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)}
+.status-dot::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--green)}
+.tab-panel{display:none}.tab-panel.active{display:block;animation:fadeIn .5s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.card{background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);padding:36px 40px;margin-bottom:20px;transition:box-shadow var(--transition)}
+.card:hover{box-shadow:var(--shadow-md)}
+
+.upload-zone{border:2px dashed var(--border);border-radius:var(--radius-lg);padding:64px 40px;text-align:center;cursor:pointer;transition:all var(--transition);background:var(--surface)}
+.upload-zone:hover{border-color:var(--accent);box-shadow:var(--shadow-md)}
+.upload-zone.drag-over{border-color:var(--accent);background:#f0f7ff;box-shadow:var(--shadow-lg)}
+.upload-zone.hidden{display:none}
+.upload-icon{width:56px;height:56px;border-radius:50%;background:#f0f7ff;display:inline-flex;align-items:center;justify-content:center;font-size:24px;margin-bottom:16px;color:var(--accent)}
+.upload-text{font-size:18px;font-weight:600;letter-spacing:-0.01em;margin-bottom:4px}
+.upload-hint{font-size:13px;color:var(--text-secondary)}
+
+.progress-section{display:none;margin-top:16px}.progress-section.visible{display:block}
+.progress-track{height:4px;border-radius:2px;background:#e8e8ed;overflow:hidden}
+.progress-fill{height:100%;width:0%;border-radius:2px;background:var(--accent);transition:width .25s ease}
+.progress-label{display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);margin-top:8px}
+.progress-percent{color:var(--accent);font-size:28px;font-weight:700}
+
+.results-section{display:none;margin-top:20px}.results-section.visible{display:block}
+
+.video-card{max-width:560px;margin:0 auto 20px;background:#000;border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow-md)}
+.video-card video{width:100%;display:block;aspect-ratio:16/9;object-fit:contain;background:#111}
+.video-dl-row{max-width:560px;margin:0 auto 20px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+
+.summary-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+.stat-card{background:var(--surface);border-radius:var(--radius);padding:24px 20px;text-align:center;box-shadow:var(--shadow-sm);transition:all var(--transition)}
+.stat-card:hover{box-shadow:var(--shadow-md);transform:translateY(-2px)}
+.stat-value{font-size:34px;font-weight:700;letter-spacing:-0.02em;line-height:1.1}
+.stat-value.accent{color:var(--accent)}.stat-label{font-size:12px;color:var(--text-secondary);margin-top:4px;text-transform:uppercase;letter-spacing:0.08em}
+.grade-badge{display:inline-block;font-size:28px;font-weight:700;padding:4px 16px;border-radius:12px;color:#fff}
+.grade-a{background:var(--green)}.grade-b{background:var(--accent)}.grade-c{background:var(--orange)}.grade-d{background:var(--red)}
+
+.section-title{font-size:20px;font-weight:700;letter-spacing:-0.02em;margin-bottom:14px}
+
+/* Radar + AI — equal height via stretch */
+.radar-summary-wrap{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px;align-items:stretch}
+.radar-card{background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);padding:24px;display:flex;align-items:center;justify-content:center}
+.radar-card canvas{max-width:100%;max-height:340px}
+.ai-summary-card{background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);padding:28px 32px;display:flex;flex-direction:column;justify-content:center}
+.ai-grade{font-size:48px;font-weight:700;letter-spacing:-0.03em;line-height:1}
+.ai-subtitle{font-size:14px;color:var(--text-secondary);margin-bottom:16px}
+.ai-insight{font-size:13px;line-height:1.8;color:var(--text)}
+.ai-highlight{display:inline-block;padding:1px 7px;border-radius:4px;font-weight:600;margin:0 1px}
+.ai-hl-good{background:#e8f8ed;color:var(--green)}.ai-hl-bad{background:#ffece8;color:var(--red)}.ai-hl-warn{background:#fff4e5;color:var(--orange)}
+
+.prescription-list{display:flex;flex-direction:column;gap:10px;margin-bottom:20px}
+.presc-card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-sm);overflow:hidden;transition:all var(--transition)}
+.presc-card:hover{box-shadow:var(--shadow-md)}
+.presc-header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;cursor:pointer;user-select:none;font-size:14px;font-weight:500;transition:background 0.2s}
+.presc-header:hover{background:#f5f5f7}
+.presc-title{display:flex;align-items:center;gap:12px;flex:1}
+.presc-score{min-width:40px;height:40px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#fff;flex-shrink:0}
+.presc-score.good{background:var(--green)}.presc-score.warn{background:var(--orange)}.presc-score.bad{background:var(--red)}
+.presc-arrow{font-size:11px;color:var(--text-tertiary);transition:transform .3s;flex-shrink:0}
+.presc-card.open .presc-arrow{transform:rotate(180deg)}
+.presc-body{display:none;padding:0 24px 20px 76px;font-size:13px;color:var(--text-secondary);line-height:2}
+.presc-card.open .presc-body{display:block}
+.presc-body li{display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;list-style:none}
+.presc-body li::before{content:'';min-width:5px;height:5px;border-radius:50%;background:var(--accent);margin-top:9px;flex-shrink:0}
+.presc-footnote{margin-top:10px;font-size:11px;color:var(--text-tertiary)}
+.presc-empty{text-align:center;padding:36px;color:var(--green);font-size:15px;font-weight:500;background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm)}
+
+.table-wrap{overflow-x:auto;margin-bottom:20px}
+.data-table{width:100%;border-collapse:collapse;font-size:13px}
+.data-table th{text-align:left;padding:12px 16px;color:var(--text);font-weight:600;border-bottom:2px solid #e8e8ed;font-size:11px;text-transform:uppercase;letter-spacing:0.06em}
+.data-table td{padding:12px 16px;border-bottom:1px solid #f0f0f2;color:var(--text-secondary)}
+.data-table tbody tr{transition:background .2s}.data-table tbody tr:hover{background:#f5f5f7}
+
+.btn{font-family:var(--font);font-size:13px;font-weight:500;padding:8px 20px;border-radius:20px;cursor:pointer;border:none;background:#f2f2f5;color:var(--text);transition:all 0.2s;white-space:nowrap;text-decoration:none;display:inline-block}
+.btn:hover{background:#e8e8ed}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-hover)}
+.btn-danger{background:transparent;color:var(--red)}.btn-danger:hover{background:#ffece8}
+.btn-lg{font-size:15px;padding:12px 28px;border-radius:24px}
+.action-row{display:flex;gap:12px;margin-top:24px;justify-content:center;flex-wrap:wrap}
+
+.trend-card{background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);padding:28px;margin-bottom:20px;display:none}
+.trend-card.visible{display:block}.trend-card canvas{max-height:280px}
+.check-col{width:36px;text-align:center}.action-btns{display:flex;gap:6px;flex-wrap:wrap}
+.history-grade{display:inline-block;font-size:12px;font-weight:600;padding:3px 10px;border-radius:6px;color:#fff}
+.empty-state{text-align:center;padding:60px 20px;color:var(--text-secondary)}.empty-state-icon{font-size:40px;margin-bottom:12px;opacity:.3}
+
+.toast-container{position:fixed;top:24px;right:24px;z-index:10000;display:flex;flex-direction:column;gap:8px}
+.toast{background:var(--surface);border-radius:12px;padding:14px 20px;font-size:13px;color:var(--text);box-shadow:var(--shadow-lg);animation:toastIn .4s ease;min-width:240px;border-left:3px solid var(--green)}
+.toast.error{border-left-color:var(--red)}
+@keyframes toastIn{from{opacity:0;transform:translateX(32px)}to{opacity:1;transform:translateX(0)}}
+
+.modal-overlay{display:none;position:fixed;inset:0;z-index:999;background:rgba(0,0,0,0.35);backdrop-filter:blur(8px);align-items:center;justify-content:center}
+.modal-overlay.visible{display:flex}
+.modal-box{background:var(--surface);border-radius:var(--radius-lg);padding:36px;max-width:400px;width:90%;text-align:center;box-shadow:var(--shadow-lg);animation:modalIn .35s cubic-bezier(0.25,0.1,0.25,1)}
+@keyframes modalIn{from{opacity:0;transform:scale(0.92) translateY(12px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.modal-title{font-size:18px;font-weight:700;margin-bottom:8px}
+.modal-desc{font-size:13px;color:var(--text-secondary);margin-bottom:24px}
+.modal-actions{display:flex;gap:12px;justify-content:center}
+
+.reveal{opacity:0;transform:translateY(24px);transition:opacity .7s ease,transform .7s ease}
+.reveal.visible{opacity:1;transform:translateY(0)}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.12);border-radius:3px}
+
+@media(max-width:768px){
+  .radar-summary-wrap{grid-template-columns:1fr}
+  .summary-row{grid-template-columns:repeat(2,1fr)}
+  .header-inner{flex-wrap:wrap;height:auto;padding:10px 0;gap:8px}
+  .card{padding:24px 20px}
+  .upload-zone{padding:40px 24px}
+}
+.ex-link{color:var(--accent);text-decoration:none;cursor:pointer;transition:all .2s}
+.ex-link:hover{text-decoration:underline;color:var(--accent-hover)}
+.ex-link::after{content:' ↗';font-size:10px;opacity:0.5}
+</style>
+</head>
+<body>
+<div class="app-container">
+  <header class="header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <div class="header-logo">&#9654;</div>
+        <div><div class="header-title">Pose Analysis</div><div class="header-subtitle">YOLOv8-Pose</div></div>
+      </div>
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-tab="upload">上传分析</button>
+        <button class="nav-tab" data-tab="history">历史记录</button>
+      </nav>
+      <span class="status-dot" id="status-indicator">在线</span>
+    </div>
+  </header>
+
+  <div class="tab-panel active" id="panel-upload">
+    <div class="upload-zone" id="upload-zone">
+      <div class="upload-icon">&#8593;</div>
+      <div class="upload-text">选择视频开始分析</div>
+      <div class="upload-hint">拖拽文件至此处，或点击选择 · 支持 MP4、MOV、AVI、MKV</div>
+      <input type="file" id="file-input" accept=".mp4,.mov,.avi,.mkv" style="display:none">
+    </div>
+
+    <div class="card progress-section" id="progress-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span style="font-size:14px;font-weight:600" id="progress-status">正在分析</span>
+        <span class="progress-percent" id="progress-percent">0%</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+    </div>
+
+    <div class="results-section" id="results-section">
+      <div class="video-card" id="video-card">
+        <video id="result-video" autoplay muted playsinline controls preload="metadata"></video>
+      </div>
+      <div class="video-dl-row">
+        <button class="btn" id="btn-dl-skeleton">下载骨骼视频</button>
+        <button class="btn" id="btn-dl-report">下载 JSON 数据</button>
+      </div>
+
+      <div class="summary-row" id="summary-row">
+        <div class="stat-card reveal"><div class="stat-value accent" id="sum-time">--</div><div class="stat-label">处理时长 (秒)</div></div>
+        <div class="stat-card reveal"><div class="stat-value accent" id="sum-frames">--</div><div class="stat-label">分析帧数</div></div>
+        <div class="stat-card reveal"><div class="grade-badge" id="grade-badge">--</div><div class="stat-label">综合等级</div></div>
+        <div class="stat-card reveal"><div class="stat-value accent" id="sum-score">--</div><div class="stat-label">综合评分</div></div>
+      </div>
+
+      <div class="section-title">能力评估</div>
+      <div class="radar-summary-wrap reveal" id="radar-summary-wrap">
+        <div class="radar-card"><canvas id="radar-chart"></canvas></div>
+        <div class="ai-summary-card" id="ai-summary">
+          <div style="font-size:12px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">AI 智能评估</div>
+          <div class="ai-grade" id="ai-score" style="color:var(--accent)">--</div>
+          <div class="ai-subtitle" id="ai-grade-text"></div>
+          <div class="ai-insight" id="ai-insight-text"></div>
+        </div>
+      </div>
+
+      <div class="section-title">运动处方</div>
+      <div class="prescription-list reveal" id="prescription-list"></div>
+
+      <div class="section-title">详细数据</div>
+      <div class="table-wrap reveal">
+        <table class="data-table">
+          <thead><tr><th>关节</th><th>最小值°</th><th>最大值°</th><th>均值°</th><th>标准差</th><th>活动范围</th></tr></thead>
+          <tbody id="joint-stats-body"></tbody>
+        </table>
+      </div>
+
+      <div class="action-row">
+        <button class="btn btn-primary btn-lg" id="btn-reanalyze">开始新的分析</button>
+        <button class="btn btn-lg" id="btn-export-pdf">导出 PDF 报告</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="panel-history">
+    <div class="trend-card" id="trend-card">
+      <div class="section-title">历史趋势</div>
+      <canvas id="trend-chart"></canvas>
+    </div>
+    <div class="card">
+      <div class="section-title">分析记录</div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th class="check-col">对比</th><th>ID</th><th>日期</th><th>等级</th><th>骨骼</th><th>报告</th><th>操作</th></tr></thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+      <div class="empty-state" id="history-empty" style="display:none"><div class="empty-state-icon">&#9680;</div><div>暂无分析记录</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+<div class="modal-overlay" id="delete-modal">
+  <div class="modal-box">
+    <div class="modal-title">确认删除</div>
+    <div class="modal-desc" id="modal-file-id"></div>
+    <div class="modal-actions">
+      <button class="btn" id="modal-cancel">取消</button>
+      <button class="btn btn-danger" id="modal-confirm">删除</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  try{const o=new IntersectionObserver(e=>{e.forEach(v=>{if(v.isIntersecting){v.target.classList.add('visible');o.unobserve(v.target)}})},{threshold:0.15,rootMargin:'0px 0px -30px 0px'});document.querySelectorAll('.reveal').forEach(el=>o.observe(el));window._ro=o}catch(e){}
+})();
+function refreshReveal(){try{document.querySelectorAll('.reveal').forEach(el=>{el.classList.remove('visible');if(window._ro)window._ro.observe(el)})}catch(e){}}
+
+const $=s=>document.querySelector(s);
+const dom={
+  tabs:document.querySelectorAll('.nav-tab'),panels:document.querySelectorAll('.tab-panel'),
+  uploadZone:$('#upload-zone'),fileInput:$('#file-input'),
+  progressSection:$('#progress-section'),progressFill:$('#progress-fill'),
+  progressPercent:$('#progress-percent'),progressStatus:$('#progress-status'),
+  resultsSection:$('#results-section'),resultVideo:$('#result-video'),
+  btnDlSkeleton:$('#btn-dl-skeleton'),btnDlReport:$('#btn-dl-report'),
+  sumTime:$('#sum-time'),sumFrames:$('#sum-frames'),sumScore:$('#sum-score'),
+  gradeBadge:$('#grade-badge'),aiScore:$('#ai-score'),aiGradeText:$('#ai-grade-text'),
+  aiInsight:$('#ai-insight-text'),jointStatsBody:$('#joint-stats-body'),
+  prescriptionList:$('#prescription-list'),btnReanalyze:$('#btn-reanalyze'),
+  btnExportPdf:$('#btn-export-pdf'),trendCard:$('#trend-card'),
+  historyBody:$('#history-body'),historyEmpty:$('#history-empty'),
+  toastContainer:$('#toast-container'),deleteModal:$('#delete-modal'),
+  modalFileId:$('#modal-file-id'),modalCancel:$('#modal-cancel'),modalConfirm:$('#modal-confirm'),
+  statusIndicator:$('#status-indicator')
+};
+let currentFileId=null,currentReport=null,radarChart=null,trendChart=null,deleteTargetId=null;
+let progressTimer=null,currentProgress=0,targetProgress=0;
+
+function showToast(msg,type='success'){
+  try{const el=document.createElement('div');el.className='toast'+(type==='error'?' error':'');el.textContent=msg;dom.toastContainer.appendChild(el);setTimeout(()=>{el.style.opacity='0';el.style.transition='opacity .3s';setTimeout(()=>el.remove(),350)},3000)}catch(e){}
+}
+
+async function downloadFile(url,filename){
+  try{showToast('正在下载…');const res=await fetch(url);if(!res.ok)throw new Error('HTTP '+res.status);const blob=await res.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);showToast('下载完成')}catch(e){showToast('下载失败','error')}
+}
+
+// ===== SMOOTH PROGRESS =====
+function startProgress(){currentProgress=0;targetProgress=0;dom.progressFill.style.width='0%';dom.progressPercent.textContent='0%';stepProgress()}
+function setTargetProgress(p){targetProgress=p}
+function stepProgress(){
+  if(currentProgress<targetProgress){currentProgress+=Math.max(0.3,(targetProgress-currentProgress)*0.08);if(currentProgress>targetProgress)currentProgress=targetProgress;dom.progressFill.style.width=currentProgress+'%';dom.progressPercent.textContent=Math.round(currentProgress)+'%'}
+  if(currentProgress<targetProgress||targetProgress>0)progressTimer=requestAnimationFrame(stepProgress);
+}
+function finishProgress(cb){targetProgress=100;stepProgress();setTimeout(()=>{if(progressTimer)cancelAnimationFrame(progressTimer);currentProgress=100;dom.progressFill.style.width='100%';dom.progressPercent.textContent='100%';if(cb)cb()},800)}
+
+// Tabs
+dom.tabs.forEach(tab=>{tab.addEventListener('click',()=>{dom.tabs.forEach(t=>t.classList.remove('active'));tab.classList.add('active');dom.panels.forEach(p=>p.classList.remove('active'));$('#panel-'+tab.dataset.tab).classList.add('active');if(tab.dataset.tab==='history')loadHistory()})});
+
+async function checkHealth(){try{const r=await fetch('/health');if(r.ok){dom.statusIndicator.innerHTML='在线';dom.statusIndicator.style.color='var(--green)'}}catch(e){dom.statusIndicator.innerHTML='离线';dom.statusIndicator.style.color='var(--red)'}}
+
+// Upload
+dom.uploadZone.addEventListener('click',()=>dom.fileInput.click());
+dom.fileInput.addEventListener('change',e=>{if(e.target.files.length)handleUpload(e.target.files[0])});
+['dragover','dragleave','drop'].forEach(ev=>{dom.uploadZone.addEventListener(ev,e=>{e.preventDefault();if(ev==='dragover')dom.uploadZone.classList.add('drag-over');else if(ev==='dragleave')dom.uploadZone.classList.remove('drag-over');else{dom.uploadZone.classList.remove('drag-over');if(e.dataTransfer.files.length)handleUpload(e.dataTransfer.files[0])}})});
+
+function handleUpload(file){
+  const ext='.'+file.name.split('.').pop().toLowerCase();
+  if(!['.mp4','.mov','.avi','.mkv'].includes(ext)){showToast('仅支持 MP4 / MOV / AVI / MKV','error');return}
+  dom.progressSection.classList.add('visible');dom.resultsSection.classList.remove('visible');
+  dom.uploadZone.classList.add('hidden');
+  dom.progressStatus.textContent='上传中';startProgress();
+  const fd=new FormData();fd.append('file',file);
+  const xhr=new XMLHttpRequest();xhr.open('POST','/upload');
+  xhr.upload.addEventListener('progress',e=>{if(e.lengthComputable){setTargetProgress(Math.round(e.loaded/e.total*85))}});
+  xhr.addEventListener('load',()=>{
+    dom.progressStatus.textContent='分析中';
+    if(xhr.status===200){
+      try{const d=JSON.parse(xhr.responseText);if(d.status==='success'){dom.progressStatus.textContent='完成';finishProgress(()=>{showResult(d);showToast('分析完成')})}else{showToast('失败: '+(d.message||'错误'),'error');resetUpload()}}catch(e){showToast('解析失败','error');resetUpload()}
+    }else{try{showToast('失败: '+JSON.parse(xhr.responseText).detail,'error')}catch(e){showToast('HTTP '+xhr.status,'error')}resetUpload()}
+  });
+  xhr.addEventListener('error',()=>{showToast('网络错误','error');resetUpload()});
+  // Simulate upload progress to avoid stuck-at-90 look
+  xhr.addEventListener('readystatechange',()=>{if(xhr.readyState===3&&currentProgress<80)setTargetProgress(80)});
+  xhr.send(fd);
+}
+function resetUpload(){dom.progressSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');if(progressTimer)cancelAnimationFrame(progressTimer)}
+
+function computeDimensions(report){
+  const j=report.joint_statistics||{},o=report.offset_statistics||{},s=report.summary||{},m=report.report_meta||{},dims={};
+  dims['对称性']=Math.round(s.symmetry_score??50);
+  let romVals=[];['left_knee','right_knee','left_elbow','right_elbow','left_hip','right_hip'].forEach(n=>{if(j[n]&&j[n].range!=null)romVals.push(j[n].range)});
+  dims['关节活动度']=romVals.length?Math.round(Math.min(100,(romVals.reduce((a,b)=>a+b,0)/romVals.length)/130*100)):50;
+  let core=80;if(o['trunk_aspect_ratio']&&o['trunk_aspect_ratio'].mean!=null){const t=o['trunk_aspect_ratio'].mean;if(t>2.5)core-=30;else if(t>2)core-=15}if(o['spine_horizontal_dev_px']&&o['spine_horizontal_dev_px'].mean!=null){const t=o['spine_horizontal_dev_px'].mean;if(t>20)core-=30;else if(t>10)core-=15}
+  dims['核心稳定']=Math.round(Math.max(0,Math.min(100,core)));
+  let bal=85;['shoulder_height_diff_px','hip_height_diff_px'].forEach(k=>{if(o[k]&&o[k].mean!=null){const v=o[k].mean;if(v>15)bal-=25;else if(v>8)bal-=12}});if(o['pelvis_tilt_deg']&&o['pelvis_tilt_deg'].mean!=null){const pt=Math.abs(o['pelvis_tilt_deg'].mean);if(pt>10)bal-=25;else if(pt>5)bal-=12}
+  dims['平衡能力']=Math.round(Math.max(0,Math.min(100,bal)));
+  let fluid=75;const phases=s.action_phase_count||0,frames=m.total_frames||0;if(frames>0){const pr=phases/(frames/30);if(pr>8)fluid=90;else if(pr>4)fluid=80;else if(pr>1)fluid=65}
+  dims['动作流畅']=fluid;
+  let post=75;if(j['trunk_flexion']&&j['trunk_flexion'].mean!=null){const tf=Math.abs(j['trunk_flexion'].mean);if(tf>30)post-=30;else if(tf>15)post-=15}if(j['neck_flexion']&&j['neck_flexion'].mean!=null){const nf=Math.abs(j['neck_flexion'].mean);if(nf>30)post-=30;else if(nf>15)post-=15}
+  dims['姿态控制']=Math.round(Math.max(0,Math.min(100,post)));
+  return dims;
+}
+function _avg(arr){return Math.round(arr.reduce((a,b)=>a+b,0)/arr.length)}
+function _grade(s){return s>=90?'A':s>=75?'B':s>=60?'C':'D'}
+
+function generateAISummary(dims,av,g){
+  const entries=Object.entries(dims).sort((a,b)=>b[1]-a[1]),best=entries[0],weakOnes=entries.filter(e=>e[1]<75);
+  const labels={A:'优秀',B:'良好',C:'一般',D:'需改善'},colors={A:'var(--green)',B:'var(--accent)',C:'var(--orange)',D:'var(--red)'};
+  dom.aiScore.textContent=av+'分';dom.aiScore.style.color=colors[g];dom.aiGradeText.textContent='综合评级 '+g+' · '+labels[g];
+  const advice={对称性:{low:'左右肢体发力不均衡，长期可能导致单侧过度使用损伤。建议弱侧增加 10–15% 训练量。',high:'左右对称性良好，双侧肌力均衡。'},关节活动度:{low:'关节活动范围受限，建议每天 10–15 分钟针对性拉伸。',high:'关节活动度充足，灵活性好。'},核心稳定:{low:'核心肌群控制不足，可能导致腰椎代偿。建议每次训练加入核心环节。',high:'核心稳定性良好，躯干控制力强。'},平衡能力:{low:'平衡感有待提升，建议每周 2–3 次平衡训练。',high:'平衡能力出色，本体感觉良好。'},动作流畅:{low:'动作过渡存在代偿，建议降低速度注重质量控制。',high:'动作流畅自然，运动控制力强。'},姿态控制:{low:'存在体态偏差趋势，建议关注日常姿势并配合矫正训练。',high:'姿态控制良好，脊柱中立位稳定。'}};
+  let h='<div style="margin-bottom:8px;line-height:1.8">';
+  h+='您的整体姿态表现<strong style="color:'+(g==='A'||g==='B'?'var(--accent)':'var(--orange)')+'">'+labels[g]+'</strong>（'+av+'分）';
+  h+='<br><br><span style="color:var(--green);font-weight:600">● 优势</span>：「'+best[0]+'」'+best[1]+'分，'+advice[best[0]].high;
+  if(weakOnes.length){h+='<br><br><span style="color:var(--orange);font-weight:600">● 改善重点</span>：';weakOnes.forEach(w=>{h+='<br><span class="ai-highlight '+(w[1]>=60?'ai-hl-warn':'ai-hl-bad')+'">'+w[0]+' '+w[1]+'分</span> '+advice[w[0]].low})}
+  h+='<br><br><span style="color:var(--accent);font-weight:600">● 日常建议</span>：';
+  h+='<br>· 训练前 5–10 分钟动态热身，训练后静态拉伸';
+  h+='<br>· 每周 3 次以上力量+柔韧+平衡综合训练';
+  h+='<br>· 避免久坐超过 1 小时，定期起身活动';
+  h+='</div>';
+  dom.aiInsight.innerHTML=h;
+}
+
+function renderRadar(dims){
+  try{const ctx=document.getElementById('radar-chart').getContext('2d');if(radarChart)radarChart.destroy();const labels=Object.keys(dims),values=Object.values(dims);radarChart=new Chart(ctx,{type:'radar',data:{labels:labels.map((l,i)=>l+'  '+values[i]),datasets:[{data:values,backgroundColor:'rgba(0,113,227,0.08)',borderColor:'#0071e3',borderWidth:2,pointBackgroundColor:values.map(v=>v>=75?'#34c759':v>=60?'#ff9500':'#ff3b30'),pointBorderColor:'#fff',pointBorderWidth:2,pointRadius:4,pointHoverRadius:7}]},options:{responsive:true,maintainAspectRatio:true,scales:{r:{beginAtZero:true,max:100,min:0,ticks:{stepSize:20,color:'rgba(0,0,0,0.2)',backdropColor:'transparent',font:{size:9}},grid:{color:'rgba(0,0,0,0.06)'},angleLines:{color:'rgba(0,0,0,0.08)'},pointLabels:{color:'#1d1d1f',font:{size:11,family:"-apple-system,sans-serif"}}}},plugins:{legend:{display:false}}}})}catch(e){console.warn('Radar:',e)}
+}
+
+const EXERCISE_LINKS={'单腿硬拉':'https://search.bilibili.com/all?keyword=单腿硬拉+教学','单侧农夫行走':'https://search.bilibili.com/all?keyword=农夫行走+教学','弹力带单臂推举':'https://search.bilibili.com/all?keyword=弹力带单臂推举+教学','猫牛式脊柱流动':'https://search.bilibili.com/all?keyword=猫牛式+教学','肩关节绕环':'https://search.bilibili.com/all?keyword=肩关节绕环+教学','髋关节 90/90 拉伸':'https://search.bilibili.com/all?keyword=髋关节9090拉伸+教学','死虫式':'https://search.bilibili.com/all?keyword=死虫式+训练','平板支撑':'https://search.bilibili.com/all?keyword=平板支撑+教学','鸟狗式':'https://search.bilibili.com/all?keyword=鸟狗式+训练','单腿站立':'https://search.bilibili.com/all?keyword=单腿站立+平衡训练','BOSU球深蹲':'https://search.bilibili.com/all?keyword=BOSU球深蹲+教学','闭眼站立训练':'https://search.bilibili.com/all?keyword=闭眼站立+平衡训练','慢速深蹲':'https://search.bilibili.com/all?keyword=慢速深蹲+控制训练','弓步转体':'https://search.bilibili.com/all?keyword=弓步转体+教学','爬行训练':'https://search.bilibili.com/all?keyword=爬行训练+教学','墙壁天使':'https://search.bilibili.com/all?keyword=墙壁天使+训练','靠墙站立':'https://search.bilibili.com/all?keyword=靠墙站立+矫正','弹力带划船':'https://search.bilibili.com/all?keyword=弹力带划船+教学'};
+function makeExerciseLink(text){for(const[name,url]of Object.entries(EXERCISE_LINKS)){if(text.includes(name))return text.replace(name,'<a href="'+url+'" target="_blank" class="ex-link" title="查看「'+name+'」教学视频">'+name+'</a>')}return text}
+const RX={'对称性':{issue:'左右不对称',ex:['单腿硬拉 3×12（双侧分别进行）','单侧农夫行走 3×30秒（每侧）','弹力带单臂推举 3×15（每侧）']},'关节活动度':{issue:'关节灵活性不足',ex:['猫牛式脊柱流动 2×10次','肩关节绕环 3×15次（正反方向）','髋关节 90/90 拉伸 每侧30秒×3组']},'核心稳定':{issue:'核心控制能力不足',ex:['死虫式 3×20次（交替手脚）','平板支撑 3×45秒','鸟狗式 3×12次（每侧）']},'平衡能力':{issue:'平衡感需要提升',ex:['单腿站立 3×30秒（每侧）','BOSU球深蹲 3×12次','闭眼站立训练 3×20秒']},'动作流畅':{issue:'动作协调性待改善',ex:['慢速深蹲（4秒离心/2秒向心）3×10次','弓步转体 3×12次（交替）','爬行训练 3×10米']},'姿态控制':{issue:'体态需要矫正',ex:['墙壁天使 3×15次','靠墙站立 3×2分钟','弹力带划船 3×15次']}};
+function renderPrescriptions(dims){
+  try{dom.prescriptionList.innerHTML='';const entries=Object.entries(dims).map(([n,s])=>({name:n,score:s})).sort((a,b)=>a.score-b.score);const weak=entries.filter(e=>e.score<75);if(!weak.length){dom.prescriptionList.innerHTML='<div class="presc-empty">所有指标均正常，无需额外运动处方。请继续保持！</div>';return}weak.forEach(({name,score},i)=>{const r=RX[name]||{issue:'需改善',ex:['建议咨询专业康复师进行个性化评估']},sc=score>=60?'warn':'bad';const c=document.createElement('div');c.className='presc-card'+(i<2?' open':'');c.innerHTML='<div class="presc-header"><div class="presc-title"><span class="presc-score '+sc+'">'+score+'</span><span>'+name+' · '+r.issue+'</span></div><span class="presc-arrow">&#9660;</span></div><div class="presc-body"><ul>'+r.ex.map(e=>'<li>'+makeExerciseLink(e)+'</li>').join('')+'</ul><div class="presc-footnote">建议每周训练 3–4 次，持续 4–6 周可见改善</div></div>';dom.prescriptionList.appendChild(c);c.querySelector('.presc-header').addEventListener('click',()=>c.classList.toggle('open'))})}catch(e){console.warn('Rx:',e)}
+}
+
+function showResult(data){
+  try{
+    currentFileId=data.file_id;
+    dom.progressSection.classList.remove('visible');
+    dom.resultsSection.classList.add('visible');
+    const skelUrl='/download/skeleton/'+data.file_id,vc=document.getElementById('video-card');
+    if(data.skeleton_video){
+      dom.resultVideo.src=skelUrl;dom.resultVideo.style.display='block';
+      dom.resultVideo.onloadeddata=()=>{vc.style.display='block';dom.resultVideo.play().catch(()=>{})};
+      dom.resultVideo.onerror=()=>{vc.style.display='none';showToast('视频预览不可用，可通过按钮下载','error')};
+      dom.resultVideo.load();vc.style.display='block';dom.btnDlSkeleton.style.display='inline-block';
+      dom.btnDlSkeleton.onclick=()=>downloadFile(skelUrl,currentFileId+'_skeleton.mp4');
+    }else{vc.style.display='none';dom.btnDlSkeleton.style.display='none'}
+    dom.btnDlReport.onclick=()=>downloadFile('/download/report/'+data.file_id,currentFileId+'_report.json');
+    dom.sumTime.textContent=data.processing_time_sec??'--';dom.sumFrames.textContent=data.extracted_frames??'--';
+    fetch('/preview/report/'+data.file_id).then(r=>r.json()).then(report=>{
+      currentReport=report;const dims=computeDimensions(report),av=_avg(Object.values(dims)),g=_grade(av);
+      dom.sumScore.textContent=av;dom.gradeBadge.textContent=g;dom.gradeBadge.className='grade-badge grade-'+g.toLowerCase();
+      generateAISummary(dims,av,g);renderRadar(dims);renderPrescriptions(dims);renderJointStats(report.joint_statistics||{});
+      setTimeout(refreshReveal,100);
+      try{gsap.from('.stat-value.accent',{textContent:0,duration:1.2,snap:{textContent:1},stagger:0.1,ease:'power2.out'});setTimeout(()=>{dom.sumTime.textContent=data.processing_time_sec??'--';dom.sumFrames.textContent=data.extracted_frames??'--';dom.sumScore.textContent=av},1300)}catch(e){}
+    }).catch(()=>showToast('报告详情加载失败','error'));
+    setTimeout(()=>dom.resultsSection.scrollIntoView({behavior:'smooth',block:'start'}),200);
+  }catch(e){console.error('showResult:',e);showToast('渲染出错','error')}
+}
+
+function renderJointStats(stats){
+  try{dom.jointStatsBody.innerHTML='';const e=Object.entries(stats);if(!e.length){dom.jointStatsBody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">暂无数据</td></tr>';return}e.forEach(([n,s])=>{const tr=document.createElement('tr');tr.innerHTML='<td style="color:var(--text);font-weight:500">'+n+'</td><td>'+(s.min??'--')+'</td><td>'+(s.max??'--')+'</td><td>'+(s.mean??'--')+'</td><td>'+(s.std??'--')+'</td><td>'+(s.range??'--')+'</td>';dom.jointStatsBody.appendChild(tr)})}catch(e){}
+}
+
+dom.btnReanalyze.addEventListener('click',()=>{dom.resultsSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');dom.fileInput.value='';currentFileId=null;currentReport=null;if(radarChart){radarChart.destroy();radarChart=null}dom.prescriptionList.innerHTML='';dom.resultVideo.src='';window.scrollTo({top:0,behavior:'smooth'});showToast('已重置')});
+
+// ===== PDF EXPORT — new window + native print =====
+dom.btnExportPdf.addEventListener('click',()=>{
+  try{
+    if(!currentReport){showToast('无数据','error');return}
+    dom.btnExportPdf.textContent='准备中…';
+
+    const dims=computeDimensions(currentReport),av=_avg(Object.values(dims)),g=_grade(av);
+    const radarCanvas=document.getElementById('radar-chart');
+    const radarDataUrl=radarCanvas?radarCanvas.toDataURL('image/png'):'';
+
+    const RX_local={'对称性':{issue:'左右不对称',ex:['单腿硬拉 3×12（双侧分别进行）','单侧农夫行走 3×30秒（每侧）','弹力带单臂推举 3×15（每侧）']},'关节活动度':{issue:'关节灵活性不足',ex:['猫牛式脊柱流动 2×10次','肩关节绕环 3×15次（正反方向）','髋关节 90/90 拉伸 每侧30秒×3组']},'核心稳定':{issue:'核心控制能力不足',ex:['死虫式 3×20次（交替手脚）','平板支撑 3×45秒','鸟狗式 3×12次（每侧）']},'平衡能力':{issue:'平衡感需要提升',ex:['单腿站立 3×30秒（每侧）','BOSU球深蹲 3×12次','闭眼站立训练 3×20秒']},'动作流畅':{issue:'动作协调性待改善',ex:['慢速深蹲（4秒离心/2秒向心）3×10次','弓步转体 3×12次（交替）','爬行训练 3×10米']},'姿态控制':{issue:'体态需要矫正',ex:['墙壁天使 3×15次','靠墙站立 3×2分钟','弹力带划船 3×15次']}};
+
+    const entries=Object.entries(dims).sort((a,b)=>a[1]-b[1]).filter(e=>e[1]<75);
+    let rxHtml='';
+    entries.forEach(([name,score])=>{
+      const r=RX_local[name]||{issue:'需改善',ex:['建议咨询专业康复师']};
+      rxHtml+='<div style="margin-bottom:10px;padding:14px 18px;background:#f9f9fb;border-radius:10px;border-left:4px solid '+(score>=60?'#ff9500':'#ff3b30')+'"><div style="font-size:15px;font-weight:600;margin-bottom:8px"><span style="display:inline-block;min-width:34px;height:34px;border-radius:8px;background:'+(score>=60?'#ff9500':'#ff3b30')+';color:#fff;text-align:center;line-height:34px;font-size:15px;margin-right:10px">'+score+'</span>'+name+' · '+r.issue+'</div><ul style="list-style:none;padding:0 0 0 44px;font-size:13px;line-height:2.2;color:#555">'+r.ex.map(e=>'<li>▸ '+makeExerciseLink(e)+'</li>').join('')+'</ul></div>';
+    });
+    if(!rxHtml)rxHtml='<div style="text-align:center;padding:30px;color:#34c759;font-size:15px;font-weight:500">所有指标均正常，无需额外运动处方。</div>';
+
+    const meta=currentReport.report_meta||{},summary=currentReport.summary||{},jStats=currentReport.joint_statistics||{};
+    let tableRows='',dimRows='';
+    Object.entries(jStats).slice(0,12).forEach(([k,v])=>{tableRows+='<tr><td>'+k+'</td><td>'+(v.min??'—')+'</td><td>'+(v.max??'—')+'</td><td>'+(v.mean??'—')+'</td><td>'+(v.std??'—')+'</td></tr>'});
+    Object.entries(dims).forEach(([k,v])=>{const gv=v>=75?'A':v>=60?'B':v>=60?'C':'D';dimRows+='<tr><td>'+k+'</td><td><b>'+v+'</b></td><td style="color:'+(v>=75?'#34c759':v>=60?'#ff9500':'#ff3b30')+'"><b>'+gv+'</b></td></tr>'});
+
+    const gradeColor=g==='A'?'#34c759':g==='B'?'#0071e3':g==='C'?'#ff9500':'#ff3b30';
+
+    const html='<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>姿态分析报告</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#1d1d1f;max-width:780px;margin:0 auto;padding:40px 36px;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}h1{font-size:26px;margin:0 0 4px;letter-spacing:-0.01em}h2{font-size:17px;margin:28px 0 10px;color:#0071e3}.sub{font-size:12px;color:#999;margin-bottom:18px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.box{text-align:center;padding:18px 12px;background:#f5f5f7;border-radius:12px}.box .val{font-size:30px;font-weight:700;color:#0071e3}.box .lbl{font-size:10px;color:#86868b;text-transform:uppercase;margin-top:3px;letter-spacing:0.05em}.badge{display:inline-block;font-size:18px;font-weight:700;padding:5px 18px;border-radius:8px;color:#fff}table{width:100%;border-collapse:collapse;font-size:12px;margin:12px 0}th{text-align:left;padding:10px 14px;background:#f5f5f7;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.04em}td{padding:10px 14px;border-bottom:1px solid #eee}.rx{margin-bottom:10px;padding:14px 18px;background:#f9f9fb;border-radius:10px}.rx ul{list-style:none;padding:0 0 0 10px}.rx li{margin:4px 0}@media print{body{padding:20px}@page{margin:12mm}}</style></head><body><h1>Pose Analysis Report</h1><div class="sub">生成时间：'+new Date().toLocaleString()+' &nbsp;|&nbsp; 总帧数 '+meta.total_frames+' &nbsp;|&nbsp; 时长 '+(meta.duration_sec??0)+'s &nbsp;|&nbsp; File ID：'+(currentFileId||'—')+'</div><div class="grid"><div class="box"><div class="val">'+av+'</div><div class="lbl">综合评分</div></div><div class="box"><div><span class="badge" style="background:'+gradeColor+'">'+g+'</span></div><div class="lbl">综合等级</div></div><div class="box"><div class="val">'+(summary.anomaly_count??0)+'</div><div class="lbl">异常事件</div></div><div class="box"><div class="val">'+(summary.action_phase_count??0)+'</div><div class="lbl">动作阶段</div></div></div>'+(radarDataUrl?'<h2>六维能力图谱</h2><div style="text-align:center"><img src="'+radarDataUrl+'" style="max-width:380px;width:100%" onerror="this.style.display=\'none\'"></div>':'')+'<h2>维度得分</h2><table><tr><th>维度</th><th>得分</th><th>等级</th></tr>'+dimRows+'</table>'+(entries.length?'<h2>运动处方</h2>'+rxHtml:'<div style="text-align:center;padding:28px;color:#34c759;font-size:15px;font-weight:500">所有指标均正常，无需额外运动处方。</div>')+'<h2>关节角度统计</h2><table><tr><th>关节</th><th>最小值°</th><th>最大值°</th><th>均值°</th><th>标准差</th></tr>'+tableRows+'</table><p style="text-align:center;color:#ccc;font-size:10px;margin-top:32px;border-top:1px solid #eee;padding-top:16px">Pose Analysis System v2.0 · YOLOv8-Pose Engine</p></body></html>';
+
+    const w=window.open('','_blank','width=820,height=700');
+    if(!w){showToast('请允许弹出窗口','error');dom.btnExportPdf.textContent='导出 PDF 报告';return}
+    w.document.write(html);w.document.close();
+    // Auto open print dialog after images load
+    w.onload=()=>{setTimeout(()=>{w.print();dom.btnExportPdf.textContent='导出 PDF 报告';showToast('请在打印对话框中选择「另存为 PDF」')},600)};
+  }catch(e){console.warn('PDF:',e);showToast('导出失败','error');dom.btnExportPdf.textContent='导出 PDF 报告'}
+});
+
+// History
+let historyReports=[];
+async function loadHistory(){
+  try{const r=await fetch('/files');if(!r.ok)throw new Error('HTTP '+r.status);const data=await r.json(),files=data.files||[];dom.historyBody.innerHTML='';if(!files.length){dom.historyEmpty.style.display='';dom.trendCard.classList.remove('visible');return}dom.historyEmpty.style.display='none';historyReports=[];const ps=files.map(async f=>{try{const rr=await fetch('/preview/report/'+f.file_id);if(rr.ok){const rpt=await rr.json(),dims=computeDimensions(rpt);historyReports.push({file_id:f.file_id,timestamp:f.timestamp,created_at:f.created_at,dims,av:_avg(Object.values(dims)),grade:_grade(_avg(Object.values(dims))),has_skeleton:f.has_skeleton,has_report:f.has_report})}}catch(e){}});await Promise.all(ps);historyReports.sort((a,b)=>(b.created_at||0)-(a.created_at||0));renderTrend(historyReports);historyReports.forEach((h,i)=>{const dt=h.timestamp?h.timestamp.slice(0,4)+'-'+h.timestamp.slice(4,6)+'-'+h.timestamp.slice(6,8)+' '+h.timestamp.slice(9,11)+':'+h.timestamp.slice(11,13):'未知';const co=h.grade==='A'?'var(--green)':h.grade==='B'?'var(--accent)':h.grade==='C'?'var(--orange)':'var(--red)';const tr=document.createElement('tr');tr.style.opacity='0';tr.innerHTML='<td class="check-col"><input type="checkbox" class="trend-check" data-fileid="'+h.file_id+'" '+(i<5?'checked':'')+'></td><td style="color:var(--text);font-size:12px;font-weight:500">'+h.file_id+'</td><td style="font-size:12px">'+dt+'</td><td><span class="history-grade" style="background:'+co+'">'+h.grade+'</span></td><td>'+(h.has_skeleton?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--text-tertiary)">—</span>')+'</td><td>'+(h.has_report?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--text-tertiary)">—</span>')+'</td><td><div class="action-btns">'+(h.has_skeleton?'<button class="btn" onclick="downloadFile(\'/download/skeleton/'+h.file_id+'\',\''+h.file_id+'_skeleton.mp4\')">骨骼视频</button>':'')+(h.has_report?'<button class="btn" onclick="downloadFile(\'/download/report/'+h.file_id+'\',\''+h.file_id+'_report.json\')">报告</button>':'')+(h.has_report?'<button class="btn" data-preview="'+h.file_id+'">预览</button>':'')+'<button class="btn btn-danger" data-delete="'+h.file_id+'">删除</button></div></td>';dom.historyBody.appendChild(tr);gsap.to(tr,{opacity:1,duration:.4,delay:i*.05,ease:'power2.out'})});dom.historyBody.querySelectorAll('.trend-check').forEach(cb=>cb.addEventListener('change',()=>updateTrendFromChecks()));dom.historyBody.querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>openDeleteModal(b.dataset.delete)));dom.historyBody.querySelectorAll('[data-preview]').forEach(b=>b.addEventListener('click',()=>previewReport(b.dataset.preview)))}catch(e){console.warn('History:',e);dom.historyBody.innerHTML='';dom.historyEmpty.style.display='';dom.trendCard.classList.remove('visible')}
+}
+
+function renderTrend(reports){
+  try{dom.trendCard.classList.add('visible');const ctx=document.getElementById('trend-chart').getContext('2d');if(trendChart)trendChart.destroy();const items=reports.slice(0,5).reverse();if(!items.length){dom.trendCard.classList.remove('visible');return}const keys=['对称性','关节活动度','核心稳定','平衡能力','动作流畅','姿态控制'];const cols=['#0071e3','#34c759','#af52de','#ff9500','#ff6d00','#ff3b30'];trendChart=new Chart(ctx,{type:'line',data:{labels:items.map(r=>(r.timestamp||'').slice(4,12)||r.file_id),datasets:keys.map((k,i)=>({label:k,data:items.map(r=>r.dims[k]||0),borderColor:cols[i],backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointHoverRadius:6,tension:.3}))},options:{responsive:true,maintainAspectRatio:true,scales:{y:{min:0,max:100,ticks:{color:'rgba(0,0,0,0.35)',stepSize:20},grid:{color:'rgba(0,0,0,0.06)'}},x:{ticks:{color:'rgba(0,0,0,0.4)',font:{size:9}},grid:{display:false}}},plugins:{legend:{labels:{color:'#86868b',font:{size:10,family:"-apple-system,sans-serif"},usePointStyle:true,pointStyleWidth:8,boxWidth:8}}}}})}catch(e){console.warn('Trend:',e);dom.trendCard.classList.remove('visible')}
+}
+function updateTrendFromChecks(){const checked=[...dom.historyBody.querySelectorAll('.trend-check:checked')].map(c=>c.dataset.fileid);const filtered=historyReports.filter(r=>checked.includes(r.file_id));filtered.length?renderTrend(filtered):dom.trendCard.classList.remove('visible')}
+
+async function previewReport(fileId){
+  try{const r=await fetch('/preview/report/'+fileId);if(!r.ok)throw new Error('Not found');const data=await r.json();
+    dom.tabs.forEach(t=>t.classList.remove('active'));dom.tabs[0].classList.add('active');dom.panels.forEach(p=>p.classList.remove('active'));$('#panel-upload').classList.add('active');
+    currentFileId=fileId;currentReport=data;dom.progressSection.classList.remove('visible');dom.uploadZone.classList.add('hidden');dom.resultsSection.classList.add('visible');
+    const skelUrl='/download/skeleton/'+fileId,vc=document.getElementById('video-card');
+    dom.resultVideo.src=skelUrl;dom.resultVideo.style.display='block';
+    dom.resultVideo.onloadeddata=()=>{vc.style.display='block';dom.resultVideo.play().catch(()=>{})};
+    dom.resultVideo.onerror=()=>{vc.style.display='none';showToast('视频预览不可用','error')};
+    dom.resultVideo.load();vc.style.display='block';dom.btnDlSkeleton.style.display='inline-block';
+    dom.btnDlSkeleton.onclick=()=>downloadFile(skelUrl,fileId+'_skeleton.mp4');
+    dom.btnDlReport.onclick=()=>downloadFile('/download/report/'+fileId,fileId+'_report.json');
+    const meta=data.report_meta||{};dom.sumTime.textContent=meta.duration_sec??'--';dom.sumFrames.textContent=meta.total_frames??'--';
+    const dims=computeDimensions(data),av=_avg(Object.values(dims)),g=_grade(av);
+    dom.sumScore.textContent=av;dom.gradeBadge.textContent=g;dom.gradeBadge.className='grade-badge grade-'+g.toLowerCase();
+    generateAISummary(dims,av,g);renderRadar(dims);renderPrescriptions(dims);renderJointStats(data.joint_statistics||{});
+    setTimeout(refreshReveal,100);setTimeout(()=>dom.resultsSection.scrollIntoView({behavior:'smooth'}),200);showToast('报告已加载');
+  }catch(e){showToast('加载失败','error')}
+}
+
+function openDeleteModal(fid){deleteTargetId=fid;dom.modalFileId.textContent='确定删除 '+fid+' 及其关联的所有文件？此操作不可撤销。';dom.deleteModal.classList.add('visible')}
+dom.modalCancel.addEventListener('click',()=>{dom.deleteModal.classList.remove('visible');deleteTargetId=null});
+dom.modalConfirm.addEventListener('click',async()=>{if(!deleteTargetId)return;try{const r=await fetch('/files/'+deleteTargetId,{method:'DELETE'});if(r.ok){showToast('已删除');loadHistory()}else{showToast('删除失败','error')}}catch(e){showToast('请求失败','error')}dom.deleteModal.classList.remove('visible');deleteTargetId=null});
+dom.deleteModal.addEventListener('click',e=>{if(e.target===dom.deleteModal){dom.deleteModal.classList.remove('visible');deleteTargetId=null}});
+
+async function init(){checkHealth();setInterval(checkHealth,30000)}
+init().catch(e=>console.error(e));
+</script>
+</body>
+</html>

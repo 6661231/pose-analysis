@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+temp_uploads/
+temp_skeletons/
+video_storage/
+*.pt
+.DS_Store
+Thumbs.db
