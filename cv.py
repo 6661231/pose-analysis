@@ -307,6 +307,12 @@ class VideoBatchProcessor:
             out_path = out_dir / f"{task.file_id}_skeleton.mp4"
             fourcc = cv2.VideoWriter_fourcc(*"avc1")
             writer = cv2.VideoWriter(str(out_path), fourcc, self.extractor.target_fps, (width, height))
+            need_convert = False
+            if not writer.isOpened():
+                logger.warning(f"[Batch] avc1 不可用，回退 mp4v+ffmpeg 转换")
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(str(out_path), fourcc, self.extractor.target_fps, (width, height))
+                need_convert = True
 
             processed = 0
             try:
@@ -329,6 +335,23 @@ class VideoBatchProcessor:
                 logger.error(f"[Batch] 骨骼生成失败 [{tid}]: {e}")
             finally:
                 writer.release()
+
+            # 若 mp4v 不兼容浏览器，用 ffmpeg 转 H.264
+            if need_convert:
+                import subprocess, shutil
+                tmp_path = out_path.with_suffix('.tmp.mp4')
+                try:
+                    shutil.move(str(out_path), str(tmp_path))
+                    subprocess.run(
+                        ['ffmpeg', '-i', str(tmp_path), '-c:v', 'libx264', '-preset', 'fast', '-y', str(out_path)],
+                        capture_output=True, timeout=60
+                    )
+                    tmp_path.unlink(missing_ok=True)
+                    logger.info(f"[Batch] ffmpeg 转换完成: {out_path}")
+                except Exception as e2:
+                    logger.warning(f"[Batch] ffmpeg 转换失败: {e2}, 保留原始格式")
+                    if tmp_path.exists():
+                        shutil.move(str(tmp_path), str(out_path))
 
             # 释放内存
             task._frame_buffer.clear()
