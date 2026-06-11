@@ -315,16 +315,28 @@ function handleUpload(file){
   dom.progressStatus.textContent='上传中';startProgress();
   const fd=new FormData();fd.append('file',file);
   const xhr=new XMLHttpRequest();xhr.open('POST','/upload');
-  xhr.upload.addEventListener('progress',e=>{if(e.lengthComputable){setTargetProgress(Math.round(e.loaded/e.total*85))}});
+  xhr.upload.addEventListener('progress',e=>{if(e.lengthComputable){setTargetProgress(Math.round(e.loaded/e.total*30))}});
   xhr.addEventListener('load',()=>{
-    dom.progressStatus.textContent='分析中';
     if(xhr.status===200){
-      try{const d=JSON.parse(xhr.responseText);if(d.status==='success'){dom.progressStatus.textContent='完成';finishProgress(()=>{showResult(d);showToast('分析完成')})}else{showToast('失败: '+(d.message||'错误'),'error');resetUpload()}}catch(e){showToast('解析失败','error');resetUpload()}
+      try{const d=JSON.parse(xhr.responseText);
+      if(d.task_id){
+        setTargetProgress(35);dom.progressStatus.textContent='分析中';
+        if(window._sse)window._sse.close();
+        const es=new EventSource('/progress/'+d.task_id);window._sse=es;
+        es.onmessage=ev=>{
+          try{const p=JSON.parse(ev.data);setTargetProgress(35+Math.round(p.progress*.65));
+          if(p.done){es.close();dom.progressStatus.textContent='完成';
+            fetch('/result/'+d.task_id).then(r=>r.json()).then(data=>{
+              finishProgress(()=>{showResult(data);showToast('分析完成')});
+            }).catch(()=>{showToast('获取结果失败','error');resetUpload()})}
+          }catch(e){}
+        };
+        es.onerror=()=>{showToast('进度连接断开','error');resetUpload()};
+      }else{showToast('失败: '+(d.message||d.detail||'错误'),'error');resetUpload()}
+      }catch(e){showToast('解析失败','error');resetUpload()}
     }else{try{showToast('失败: '+JSON.parse(xhr.responseText).detail,'error')}catch(e){showToast('HTTP '+xhr.status,'error')}resetUpload()}
   });
   xhr.addEventListener('error',()=>{showToast('网络错误','error');resetUpload()});
-  // Simulate upload progress to avoid stuck-at-90 look
-  xhr.addEventListener('readystatechange',()=>{if(xhr.readyState===3&&currentProgress<80)setTargetProgress(80)});
   xhr.send(fd);
 }
 function resetUpload(){dom.progressSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');if(progressTimer)cancelAnimationFrame(progressTimer)}
@@ -364,6 +376,13 @@ function generateAISummary(dims,av,g){
   dom.aiInsight.innerHTML=h;
 }
 
+function renderCompareRadar(rA,rB){
+  try{const ctx=document.getElementById('trend-chart').getContext('2d');if(trendChart)trendChart.destroy();
+  const labels=Object.keys(rA.dims),colors=['#0071e3','#ff9500'];
+  trendChart=new Chart(ctx,{type:'radar',data:{labels:labels.map((l,i)=>l),datasets:[
+    {label:rA.timestamp||rA.file_id,data:Object.values(rA.dims),backgroundColor:'rgba(0,113,227,0.06)',borderColor:colors[0],borderWidth:2,pointRadius:4},
+    {label:rB.timestamp||rB.file_id,data:Object.values(rB.dims),backgroundColor:'rgba(255,149,0,0.06)',borderColor:colors[1],borderWidth:2,pointRadius:4}
+  ]},options:{responsive:true,maintainAspectRatio:true,scales:{r:{beginAtZero:true,max:100,min:0,ticks:{stepSize:20,color:'rgba(0,0,0,0.2)',font:{size:9}},grid:{color:'rgba(0,0,0,0.06)'},angleLines:{color:'rgba(0,0,0,0.08)'},pointLabels:{color:'#1d1d1f',font:{size:11}}}},plugins:{legend:{labels:{color:'#86868b',font:{size:10},usePointStyle:true}}}}})}catch(e){console.warn('CRadar:',e)}}
 function renderRadar(dims){
   try{const ctx=document.getElementById('radar-chart').getContext('2d');if(radarChart)radarChart.destroy();const labels=Object.keys(dims),values=Object.values(dims);radarChart=new Chart(ctx,{type:'radar',data:{labels:labels.map((l,i)=>l+'  '+values[i]),datasets:[{data:values,backgroundColor:'rgba(0,113,227,0.08)',borderColor:'#0071e3',borderWidth:2,pointBackgroundColor:values.map(v=>v>=75?'#34c759':v>=60?'#ff9500':'#ff3b30'),pointBorderColor:'#fff',pointBorderWidth:2,pointRadius:4,pointHoverRadius:7}]},options:{responsive:true,maintainAspectRatio:true,scales:{r:{beginAtZero:true,max:100,min:0,ticks:{stepSize:20,color:'rgba(0,0,0,0.2)',backdropColor:'transparent',font:{size:9}},grid:{color:'rgba(0,0,0,0.06)'},angleLines:{color:'rgba(0,0,0,0.08)'},pointLabels:{color:'#1d1d1f',font:{size:11,family:"-apple-system,sans-serif"}}}},plugins:{legend:{display:false}}}})}catch(e){console.warn('Radar:',e)}
 }
@@ -378,13 +397,14 @@ function renderPrescriptions(dims){
 function showResult(data){
   try{
     currentFileId=data.file_id;
+    if(!currentFileId){showToast('处理失败: '+data.message,'error');resetUpload();return}
     dom.progressSection.classList.remove('visible');
     dom.resultsSection.classList.add('visible');
     const skelUrl='/download/skeleton/'+data.file_id,vc=document.getElementById('video-card');
     if(data.skeleton_video){
       dom.resultVideo.src=skelUrl;dom.resultVideo.style.display='block';
       dom.resultVideo.onloadeddata=()=>{vc.style.display='block';dom.resultVideo.play().catch(()=>{})};
-      dom.resultVideo.onerror=()=>{vc.style.display='none';showToast('视频预览不可用，可通过按钮下载','error')};
+      dom.resultVideo.onerror=()=>{vc.style.display='none'};
       dom.resultVideo.load();vc.style.display='block';dom.btnDlSkeleton.style.display='inline-block';
       dom.btnDlSkeleton.onclick=()=>downloadFile(skelUrl,currentFileId+'_skeleton.mp4');
     }else{vc.style.display='none';dom.btnDlSkeleton.style.display='none'}
@@ -401,8 +421,9 @@ function showResult(data){
   }catch(e){console.error('showResult:',e);showToast('渲染出错','error')}
 }
 
+const JOINT_ZH={left_elbow:'左肘关节',right_elbow:'右肘关节',left_knee:'左膝关节',right_knee:'右膝关节',left_hip:'左髋关节',right_hip:'右髋关节',left_ankle:'左踝关节',right_ankle:'右踝关节',trunk_flexion:'躯干前倾',neck_flexion:'颈部屈曲'};
 function renderJointStats(stats){
-  try{dom.jointStatsBody.innerHTML='';const e=Object.entries(stats);if(!e.length){dom.jointStatsBody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">暂无数据</td></tr>';return}e.forEach(([n,s])=>{const tr=document.createElement('tr');tr.innerHTML='<td style="color:var(--text);font-weight:500">'+n+'</td><td>'+(s.min??'--')+'</td><td>'+(s.max??'--')+'</td><td>'+(s.mean??'--')+'</td><td>'+(s.std??'--')+'</td><td>'+(s.range??'--')+'</td>';dom.jointStatsBody.appendChild(tr)})}catch(e){}
+  try{dom.jointStatsBody.innerHTML='';const e=Object.entries(stats);if(!e.length){dom.jointStatsBody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">暂无数据</td></tr>';return}e.forEach(([n,s])=>{const tr=document.createElement('tr');tr.innerHTML='<td style="color:var(--text);font-weight:500">'+(JOINT_ZH[n]||n)+'</td><td>'+(s.min??'--')+'</td><td>'+(s.max??'--')+'</td><td>'+(s.mean??'--')+'</td><td>'+(s.std??'--')+'</td><td>'+(s.range??'--')+'</td>';dom.jointStatsBody.appendChild(tr)})}catch(e){}
 }
 
 dom.btnReanalyze.addEventListener('click',()=>{dom.resultsSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');dom.fileInput.value='';currentFileId=null;currentReport=null;if(radarChart){radarChart.destroy();radarChart=null}dom.prescriptionList.innerHTML='';dom.resultVideo.src='';window.scrollTo({top:0,behavior:'smooth'});showToast('已重置')});
@@ -453,7 +474,7 @@ async function loadHistory(){
 function renderTrend(reports){
   try{dom.trendCard.classList.add('visible');const ctx=document.getElementById('trend-chart').getContext('2d');if(trendChart)trendChart.destroy();const items=reports.slice(0,5).reverse();if(!items.length){dom.trendCard.classList.remove('visible');return}const keys=['对称性','关节活动度','核心稳定','平衡能力','动作流畅','姿态控制'];const cols=['#0071e3','#34c759','#af52de','#ff9500','#ff6d00','#ff3b30'];trendChart=new Chart(ctx,{type:'line',data:{labels:items.map(r=>(r.timestamp||'').slice(4,12)||r.file_id),datasets:keys.map((k,i)=>({label:k,data:items.map(r=>r.dims[k]||0),borderColor:cols[i],backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointHoverRadius:6,tension:.3}))},options:{responsive:true,maintainAspectRatio:true,scales:{y:{min:0,max:100,ticks:{color:'rgba(0,0,0,0.35)',stepSize:20},grid:{color:'rgba(0,0,0,0.06)'}},x:{ticks:{color:'rgba(0,0,0,0.4)',font:{size:9}},grid:{display:false}}},plugins:{legend:{labels:{color:'#86868b',font:{size:10,family:"-apple-system,sans-serif"},usePointStyle:true,pointStyleWidth:8,boxWidth:8}}}}})}catch(e){console.warn('Trend:',e);dom.trendCard.classList.remove('visible')}
 }
-function updateTrendFromChecks(){const checked=[...dom.historyBody.querySelectorAll('.trend-check:checked')].map(c=>c.dataset.fileid);const filtered=historyReports.filter(r=>checked.includes(r.file_id));filtered.length?renderTrend(filtered):dom.trendCard.classList.remove('visible')}
+function updateTrendFromChecks(){const checked=[...dom.historyBody.querySelectorAll('.trend-check:checked')].map(c=>c.dataset.fileid);const filtered=historyReports.filter(r=>checked.includes(r.file_id));if(filtered.length===2){renderCompareRadar(filtered[0],filtered[1])}else if(filtered.length>=1){renderRadar(filtered[0].dims);dom.trendCard.classList.add('visible')}else{dom.trendCard.classList.remove('visible')}if(filtered.length>=1&&filtered.length!==2)renderTrend(filtered)}
 
 async function previewReport(fileId){
   try{const r=await fetch('/preview/report/'+fileId);if(!r.ok)throw new Error('Not found');const data=await r.json();
@@ -478,6 +499,7 @@ function openDeleteModal(fid){deleteTargetId=fid;dom.modalFileId.textContent='�
 dom.modalCancel.addEventListener('click',()=>{dom.deleteModal.classList.remove('visible');deleteTargetId=null});
 dom.modalConfirm.addEventListener('click',async()=>{if(!deleteTargetId)return;try{const r=await fetch('/files/'+deleteTargetId,{method:'DELETE'});if(r.ok){showToast('已删除');loadHistory()}else{showToast('删除失败','error')}}catch(e){showToast('请求失败','error')}dom.deleteModal.classList.remove('visible');deleteTargetId=null});
 dom.deleteModal.addEventListener('click',e=>{if(e.target===dom.deleteModal){dom.deleteModal.classList.remove('visible');deleteTargetId=null}});
+
 
 async function init(){checkHealth();setInterval(checkHealth,30000)}
 init().catch(e=>console.error(e));
