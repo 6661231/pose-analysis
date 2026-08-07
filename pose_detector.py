@@ -1,8 +1,8 @@
-import math
+import threading
 import torch
 import numpy as np
 from pathlib import Path
-from typing import Optional, List
+from typing import Dict, Optional, List, Tuple
 from ultralytics import YOLO
 import logging
 
@@ -39,7 +39,7 @@ class YOLOv8PoseDetector:
     - 自动适配 CPU / CUDA
     - 支持单帧与批量推理
     - 输出 [17, 3] 关键点数组 (x, y, confidence)
-    - 若画面有多人，自动选择面积最大的人体
+    - 若画面有多人，首帧选择面积最大者，后续按位置连续性跟踪
     """
 
     def __init__(
@@ -54,6 +54,8 @@ class YOLOv8PoseDetector:
         self.conf_threshold = conf_threshold
         self.kpt_conf_threshold = kpt_conf_threshold
         self.inference_size = inference_size
+        self._inference_lock = threading.RLock()
+        self._tracking_centers: Dict[str, np.ndarray] = {}
         torch.set_num_threads(1)  # 防止 CPU 推理占满核心导致 SSE/API 无响应
 
         if not Path(model_path).exists():
@@ -67,7 +69,43 @@ class YOLOv8PoseDetector:
         _ = self.model(torch.zeros(1, 3, inference_size, inference_size).to(self.device), verbose=False)
         logger.info("[Detector] 模型预热完成")
 
-    def detect(self, image: np.ndarray) -> Optional[np.ndarray]:
+    def _select_person(
+        self,
+        kpts_all: np.ndarray,
+        boxes: Optional[np.ndarray],
+        image_shape: Tuple[int, ...],
+        tracking_id: Optional[str],
+    ) -> int:
+        if boxes is None or len(boxes) == 0:
+            return 0
+
+        areas = np.maximum(0, boxes[:, 2] - boxes[:, 0]) * np.maximum(0, boxes[:, 3] - boxes[:, 1])
+        centers = np.column_stack([
+            (boxes[:, 0] + boxes[:, 2]) / 2,
+            (boxes[:, 1] + boxes[:, 3]) / 2,
+        ])
+        if not tracking_id or tracking_id not in self._tracking_centers:
+            selected = int(np.argmax(areas))
+        else:
+            previous = self._tracking_centers[tracking_id]
+            diagonal = max(float(np.hypot(image_shape[0], image_shape[1])), 1.0)
+            distance = np.linalg.norm(centers - previous, axis=1) / diagonal
+            area_score = areas / max(float(np.max(areas)), 1.0)
+            selected = int(np.argmax(0.35 * area_score - distance))
+
+        if tracking_id:
+            self._tracking_centers[tracking_id] = centers[selected]
+        return selected
+
+    def reset_tracking(self, tracking_id: str) -> None:
+        with self._inference_lock:
+            self._tracking_centers.pop(tracking_id, None)
+
+    def detect(
+        self,
+        image: np.ndarray,
+        tracking_id: Optional[str] = None,
+    ) -> Optional[np.ndarray]:
         """
         单帧推理
 
@@ -79,48 +117,43 @@ class YOLOv8PoseDetector:
                        坐标为输入图像的绝对像素坐标
                        若未检测到人体，返回 None
         """
-        results = self.model(image, verbose=False, conf=self.conf_threshold)
-        if not results or len(results) == 0:
-            return None
+        with self._inference_lock:
+            results = self.model(image, verbose=False, conf=self.conf_threshold)
+            if not results or len(results) == 0:
+                return None
 
-        result = results[0]
-        if result.keypoints is None or result.keypoints.data.shape[0] == 0:
-            return None
+            result = results[0]
+            if result.keypoints is None or result.keypoints.data.shape[0] == 0:
+                return None
 
-        # keypoints.data: [num_persons, 17, 3]
-        kpts_all = result.keypoints.data.cpu().numpy()
+            kpts_all = result.keypoints.data.cpu().numpy()
+            boxes = None
+            if result.boxes is not None and len(result.boxes) > 0:
+                boxes = result.boxes.xyxy.cpu().numpy()
+            best_idx = self._select_person(kpts_all, boxes, image.shape, tracking_id)
+            keypoints = kpts_all[best_idx].copy()
 
-        # 若有多人，取检测框面积最大者
-        if result.boxes is not None and len(result.boxes) > 0:
-            boxes = result.boxes.xyxy.cpu().numpy()
-            areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-            best_idx = int(np.argmax(areas))
-            kpts = kpts_all[best_idx]
-        else:
-            kpts = kpts_all[0]
-
-        # 低置信度关键点置 NaN，避免污染后续计算
-        low_conf_mask = kpts[:, 2] < self.kpt_conf_threshold
-        kpts[low_conf_mask, :2] = np.nan
-
-        return kpts
+            low_confidence = keypoints[:, 2] < self.kpt_conf_threshold
+            keypoints[low_confidence, :2] = np.nan
+            return keypoints
 
     def detect_batch(self, images: List[np.ndarray]) -> List[Optional[np.ndarray]]:
         """批量推理（利用 YOLO 内部 batch 优化）"""
-        results = self.model(images, verbose=False, conf=self.conf_threshold)
-        outputs = []
-        for result in results:
-            if result.keypoints is None or result.keypoints.data.shape[0] == 0:
-                outputs.append(None)
-                continue
-            kpts_all = result.keypoints.data.cpu().numpy()
-            if result.boxes is not None and len(result.boxes) > 0:
-                boxes = result.boxes.xyxy.cpu().numpy()
-                areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-                best_idx = int(np.argmax(areas))
-                kpts = kpts_all[best_idx]
-            else:
-                kpts = kpts_all[0]
-            kpts[kpts[:, 2] < self.kpt_conf_threshold, :2] = np.nan
-            outputs.append(kpts)
-        return outputs
+        with self._inference_lock:
+            results = self.model(images, verbose=False, conf=self.conf_threshold)
+            outputs = []
+            for result in results:
+                if result.keypoints is None or result.keypoints.data.shape[0] == 0:
+                    outputs.append(None)
+                    continue
+                kpts_all = result.keypoints.data.cpu().numpy()
+                if result.boxes is not None and len(result.boxes) > 0:
+                    boxes = result.boxes.xyxy.cpu().numpy()
+                    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                    best_idx = int(np.argmax(areas))
+                    keypoints = kpts_all[best_idx].copy()
+                else:
+                    keypoints = kpts_all[0].copy()
+                keypoints[keypoints[:, 2] < self.kpt_conf_threshold, :2] = np.nan
+                outputs.append(keypoints)
+            return outputs

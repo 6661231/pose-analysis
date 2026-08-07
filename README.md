@@ -1,77 +1,101 @@
-# Pose Analysis System v2.0
+# Pose Analysis System v4.0
 
-基于 YOLOv8-Pose 的人体姿态智能分析系统。上传视频 → 自动骨骼检测 → 六维能力评估 → AI 运动处方。
+一个本地运行的单目二维动作分析工具。系统使用 YOLOv8-Pose 提取人体关键点，对完整视频序列进行置信度过滤、短缺失插值和平滑，再生成动作报告与骨骼视频。
+
+当前重点支持深蹲分析；通用模式只记录动作趋势，投掷模式仍属于实验功能。
+
+## 能做什么
+
+- 深蹲活动范围、左右协调、躯干控制、动作平滑和节奏分析
+- 自动识别深蹲重复次数与最低点
+- 输出关键点、二维关节角、动作阶段和统计数据
+- 单独报告检测率、关键点完整度和数据可信度
+- 生成骨骼标记视频、JSON 报告、历史趋势和 PDF
+
+## 不能做什么
+
+- 不能保证真实三维关节角误差小于 5 度
+- 不能从普通视频直接计算真实力量、功率或关节负荷
+- 不能替代医生、康复师或专业动作捕捉设备
+- 通用模式的分数不能跨不同动作直接比较
 
 ## 环境要求
 
-- **Python 3.10+**（推荐 3.13）
-- **Windows 10/11**（Mac/Linux 也可，但 run.bat 不适用）
-- 首次运行需要联网下载依赖（约 2GB，含 PyTorch）
+- Python 3.10-3.13（当前已在 Python 3.13.3 验证）
+- Windows 10/11；macOS 和 Linux 可手动启动
+- 建议 8 GB 以上内存
+- NVIDIA 显卡可提升分析速度，没有显卡也可使用 CPU
 
-## 快速启动（Windows）
+首次安装依赖约需 2 GB，主要来自 PyTorch。
 
-1. 解压项目文件夹
-2. 双击 **`run.bat`**
-3. 浏览器打开 **`http://localhost:8080`**
+## 快速启动
 
-`run.bat` 会自动检查并安装缺失的依赖。
+Windows 可以双击 `run.bat`。也可以在项目目录运行：
 
-## 手动启动
-
-```bash
-# 1. 安装依赖
-pip install -r requirements.txt
-
-# 2. 启动服务
+```powershell
+python -m pip install -r requirements.txt
 python api.py
-
-# 3. 浏览器打开
-# http://localhost:8080
 ```
 
-> 如果 pip 下载慢，用国内镜像：
-> ```bash
-> pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-> ```
+浏览器访问 `http://localhost:8080`。
 
-## 使用说明
+`run.bat` 会优先复用电脑上已经安装的 Python 3.13 和依赖，不再创建虚拟环境。直接执行 `python api.py` 时，如果 PATH 仍指向旧 Python 3.8，程序也会自动切换到现有的 Python 3.13。
 
-| 功能 | 操作 |
-|------|------|
-| **上传分析** | 拖拽/点击上传 .mp4/.mov/.avi/.mkv 视频，自动完成姿态分析 |
-| **六维能力图** | 对称性、关节活动度、核心稳定、平衡能力、动作流畅、姿态控制 |
-| **AI 运动处方** | 低分维度自动生成训练建议（带组数/次数） |
-| **历史趋势** | 多次分析结果对比折线图，追踪进步 |
-| **导出 PDF** | 一键下载含雷达图和处方的完整报告 |
-| **重新分析** | 结果页底部点击，可立即分析新视频 |
+## 拍摄建议
 
-## 项目文件说明
+深蹲视频建议满足：
 
+- 全身和双脚始终在画面内
+- 相机固定，避免手持晃动和变焦
+- 相机大致位于髋部高度
+- 分析膝髋角时优先使用正侧面
+- 分析左右对称时优先使用正面
+- 光线均匀，衣服不要遮住主要关节
+- 视频原始帧率至少 10 FPS，建议 30 FPS
+
+数据可信度低于 60 分时，应先改善拍摄条件，不应直接根据动作分数做判断。
+
+## 分析模式
+
+| 模式 | 分析内容 | 建议分析帧率 |
+|------|----------|--------------|
+| 深蹲 | 活动范围、左右协调、躯干控制、平滑度、节奏、重复一致性 | 10 FPS |
+| 通用动作 | 二维角度和动作趋势 | 10 FPS |
+| 投掷（实验性） | 当前仅提供通用趋势，不输出力量结论 | 20 FPS |
+
+可以通过环境变量修改默认抽样帧率和上传限制：
+
+```powershell
+$env:POSE_TARGET_FPS="15"
+$env:POSE_MAX_UPLOAD_MB="512"
+python api.py
 ```
-├── api.py              # FastAPI 后端主入口
-├── pose_detector.py    # YOLOv8-Pose 检测器
-├── pose_engine.py      # 关节角度 / 偏移量计算
-├── visualizer.py       # 骨骼可视化绘制
-├── report_generator.py # JSON 报告生成
-├── cv.py               # 并行抽帧 / 批量处理
-├── mp4file.py          # 视频文件存储管理
-├── static/
-│   └── index.html      # 前端页面
-├── requirements.txt    # Python 依赖清单
-├── run.bat             # Windows 一键启动脚本
-└── yolov8n-pose.pt     # YOLOv8 模型权重（可选，缺失时自动下载）
+
+## 测试
+
+安装 NumPy 后，可以运行不需要加载 YOLO 模型的算法测试：
+
+```powershell
+python -m unittest discover -s tests -v
 ```
 
-## 常见问题
+测试覆盖颈部角度定义、退化角处理、缺失点插值、严格 JSON 输出和深蹲周期识别。
 
-**Q: 启动报错 `ModuleNotFoundError: No module named 'xxx'`**
-A: 运行 `pip install -r requirements.txt` 安装依赖。
+## 主要模块
 
-**Q: 浏览器打开 `http://localhost:8080` 是空白页**
-A: 确认终端显示 `Uvicorn running on http://0.0.0.0:8080`，再刷新浏览器。
+```text
+api.py                FastAPI 接口、后台任务和进度管理
+cv.py                 视频抽帧和骨骼视频生成
+pose_detector.py      YOLOv8-Pose 检测与多人连续跟踪
+pose_processing.py    置信度过滤、缺失插值、平滑和质量评分
+pose_engine.py        二维几何角度与归一化偏移量
+movement_analyzer.py  深蹲专项和通用动作评分
+report_generator.py   时序聚合与 JSON 报告
+visualizer.py         骨骼可视化
+static/index.html     浏览器界面
+tests/                算法回归测试
+```
 
-**Q: 上传视频后处理很慢**
-A: 默认用 CPU 推理，有 NVIDIA 显卡会自动切换 CUDA 加速。
+## 报告版本
 
-**Q: 端口 8080 被占用**
-A: 修改 `api.py` 最后一行 `port=8080` 为其他端口，比如 `port=9090`。
+v4 报告新增 `data_quality` 和 `movement_assessment`，并使用 `null` 表示缺失数值，不再使用 `0` 伪装缺失关键点。旧报告仍可在历史页面中预览，但旧评分不会自动变成新评分。

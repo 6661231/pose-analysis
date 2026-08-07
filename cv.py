@@ -303,16 +303,35 @@ class VideoBatchProcessor:
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             cap.release()
 
+            packet_times = np.array(
+                [packet.timestamp_sec for packet in task._frame_buffer],
+                dtype=np.float64,
+            )
+            positive_intervals = np.diff(packet_times)
+            positive_intervals = positive_intervals[positive_intervals > 0]
+            output_fps = (
+                float(1.0 / np.median(positive_intervals))
+                if len(positive_intervals)
+                else min(self.extractor.target_fps, fps if fps > 0 else self.extractor.target_fps)
+            )
+
             # 输出路径：使用 file_id 命名，便于后续存入 StorageManager
             out_path = out_dir / f"{task.file_id}_skeleton.mp4"
             fourcc = cv2.VideoWriter_fourcc(*"avc1")
-            writer = cv2.VideoWriter(str(out_path), fourcc, self.extractor.target_fps, (width, height))
+            writer = cv2.VideoWriter(str(out_path), fourcc, output_fps, (width, height))
             need_convert = False
             if not writer.isOpened():
                 logger.warning(f"[Batch] avc1 不可用，回退 mp4v+ffmpeg 转换")
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(str(out_path), fourcc, self.extractor.target_fps, (width, height))
+                writer = cv2.VideoWriter(str(out_path), fourcc, output_fps, (width, height))
                 need_convert = True
+            if not writer.isOpened():
+                task.status = "failed"
+                task.error_msg = "当前 OpenCV 环境没有可用的 MP4 视频编码器"
+                task.end_time = time.perf_counter()
+                logger.error(f"[Batch] 无法创建输出视频 [{tid}]: {out_path}")
+                writer.release()
+                continue
 
             processed = 0
             try:
@@ -327,11 +346,13 @@ class VideoBatchProcessor:
 
                 task.output_skeleton_path = out_path
                 task.status = "success"
+                task.end_time = time.perf_counter()
                 logger.info(f"[Batch] 骨骼视频生成 [{tid}]: {out_path}, "
                            f"有效帧 {processed}/{len(task._frame_buffer)}")
             except Exception as e:
                 task.status = "failed"
                 task.error_msg = f"骨骼生成失败: {e}"
+                task.end_time = time.perf_counter()
                 logger.error(f"[Batch] 骨骼生成失败 [{tid}]: {e}")
             finally:
                 writer.release()

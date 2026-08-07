@@ -1,39 +1,56 @@
 @echo off
-chcp 65001 >nul
+setlocal
 title Pose Analysis System
 
 echo ========================================
-echo   POSE ANALYSIS SYSTEM v2.0
+echo   POSE ANALYSIS SYSTEM v4.0
 echo   YOLOv8-Pose Engine
 echo ========================================
 echo.
 
-:: Check Python
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] 未找到 Python，请先安装 Python 3.10+
-    echo 下载地址: https://www.python.org/downloads/
-    pause
-    exit /b 1
-)
+set "POSE_PYTHON="
+if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "POSE_PYTHON=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+if not defined POSE_PYTHON if exist "%ProgramFiles%\Python313\python.exe" set "POSE_PYTHON=%ProgramFiles%\Python313\python.exe"
+if not defined POSE_PYTHON if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "POSE_PYTHON=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined POSE_PYTHON if exist "%ProgramFiles%\Python312\python.exe" set "POSE_PYTHON=%ProgramFiles%\Python312\python.exe"
+if not defined POSE_PYTHON set "POSE_PYTHON=python"
 
-echo [*] 检查依赖...
-python -c "import fastapi, uvicorn, ultralytics, cv2, torch, numpy" >nul 2>&1
-if errorlevel 1 (
-    echo [!] 缺少依赖，正在安装...
-    pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
-    if errorlevel 1 (
-        echo [!] 镜像源安装失败，尝试默认源...
-        pip install -r requirements.txt
-    )
-)
+"%POSE_PYTHON%" --version >nul 2>&1
+if errorlevel 1 goto no_python
 
-echo [*] 启动服务...
+echo [*] Checking dependencies...
+"%POSE_PYTHON%" -c "import fastapi, uvicorn, ultralytics, cv2, torch, numpy, multipart" >nul 2>&1
+if not errorlevel 1 goto start_server
+
+echo [*] Installing missing dependencies...
+"%POSE_PYTHON%" -m pip install -r requirements.txt
+if errorlevel 1 goto dependencies_failed
+
+:start_server
+echo [*] Starting the service with:
+"%POSE_PYTHON%" --version
+echo Browser URL: http://localhost:8080
+echo Press Ctrl+C to stop.
 echo.
-echo 浏览器打开: http://localhost:8080
-echo 按 Ctrl+C 停止服务
-echo.
+"%POSE_PYTHON%" api.py
+if errorlevel 1 goto server_failed
+goto done
 
-python api.py
+:no_python
+echo [ERROR] Python was not found.
+goto failed
 
+:dependencies_failed
+echo [ERROR] Dependency installation failed. Check the network and try again.
+goto failed
+
+:server_failed
+echo [ERROR] The service stopped unexpectedly. Keep the error shown above.
+goto failed
+
+:failed
 pause
+exit /b 1
+
+:done
+endlocal

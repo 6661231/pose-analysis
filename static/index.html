@@ -46,6 +46,10 @@ body{
 .upload-icon{width:56px;height:56px;border-radius:50%;background:#f0f7ff;display:inline-flex;align-items:center;justify-content:center;font-size:24px;margin-bottom:16px;color:var(--accent)}
 .upload-text{font-size:18px;font-weight:600;letter-spacing:-0.01em;margin-bottom:4px}
 .upload-hint{font-size:13px;color:var(--text-secondary)}
+.analysis-options{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:12px;box-shadow:var(--shadow-sm)}
+.analysis-options label{font-size:13px;font-weight:600}.analysis-options select{min-width:180px;border:1px solid #d8d8dc;border-radius:8px;background:#fff;color:var(--text);font:inherit;font-size:13px;padding:8px 34px 8px 12px;cursor:pointer}
+.quality-banner{display:none;align-items:flex-start;gap:12px;padding:14px 18px;margin-bottom:20px;border-radius:8px;background:#eef7ff;border-left:4px solid var(--accent);font-size:13px;color:var(--text-secondary)}
+.quality-banner.visible{display:flex}.quality-banner.low{background:#fff4e5;border-left-color:var(--orange)}.quality-banner strong{display:block;color:var(--text);margin-bottom:2px}
 
 .progress-section{display:none;margin-top:16px}.progress-section.visible{display:block}
 .progress-track{height:4px;border-radius:2px;background:#e8e8ed;overflow:hidden}
@@ -140,6 +144,7 @@ body{
   .header-inner{flex-wrap:wrap;height:auto;padding:10px 0;gap:8px}
   .card{padding:24px 20px}
   .upload-zone{padding:40px 24px}
+  .analysis-options{align-items:flex-start;flex-direction:column}.analysis-options select{width:100%}
 }
 .ex-link{color:var(--accent);text-decoration:none;cursor:pointer;transition:all .2s}
 .ex-link:hover{text-decoration:underline;color:var(--accent-hover)}
@@ -163,6 +168,14 @@ body{
   </header>
 
   <div class="tab-panel active" id="panel-upload">
+    <div class="analysis-options" id="analysis-options">
+      <label for="action-type">动作类型</label>
+      <select id="action-type">
+        <option value="squat" selected>深蹲</option>
+        <option value="general">通用动作记录</option>
+        <option value="throw">投掷（实验性）</option>
+      </select>
+    </div>
     <div class="upload-zone" id="upload-zone">
       <div class="upload-icon">&#8593;</div>
       <div class="upload-text">选择视频开始分析</div>
@@ -194,18 +207,20 @@ body{
         <div class="stat-card reveal"><div class="stat-value accent" id="sum-score">--</div><div class="stat-label">综合评分</div></div>
       </div>
 
+      <div class="quality-banner" id="quality-banner"></div>
+
       <div class="section-title">能力评估</div>
       <div class="radar-summary-wrap reveal" id="radar-summary-wrap">
         <div class="radar-card"><canvas id="radar-chart"></canvas></div>
         <div class="ai-summary-card" id="ai-summary">
-          <div style="font-size:12px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">AI 智能评估</div>
+          <div style="font-size:12px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">动作评估</div>
           <div class="ai-grade" id="ai-score" style="color:var(--accent)">--</div>
           <div class="ai-subtitle" id="ai-grade-text"></div>
           <div class="ai-insight" id="ai-insight-text"></div>
         </div>
       </div>
 
-      <div class="section-title">运动处方</div>
+      <div class="section-title">改进建议</div>
       <div class="prescription-list reveal" id="prescription-list"></div>
 
       <div class="section-title">详细数据</div>
@@ -262,7 +277,7 @@ function refreshReveal(){try{document.querySelectorAll('.reveal').forEach(el=>{e
 const $=s=>document.querySelector(s);
 const dom={
   tabs:document.querySelectorAll('.nav-tab'),panels:document.querySelectorAll('.tab-panel'),
-  uploadZone:$('#upload-zone'),fileInput:$('#file-input'),
+  uploadZone:$('#upload-zone'),fileInput:$('#file-input'),actionType:$('#action-type'),
   progressSection:$('#progress-section'),progressFill:$('#progress-fill'),
   progressPercent:$('#progress-percent'),progressStatus:$('#progress-status'),
   resultsSection:$('#results-section'),resultVideo:$('#result-video'),
@@ -275,7 +290,7 @@ const dom={
   historyBody:$('#history-body'),historyEmpty:$('#history-empty'),
   toastContainer:$('#toast-container'),deleteModal:$('#delete-modal'),
   modalFileId:$('#modal-file-id'),modalCancel:$('#modal-cancel'),modalConfirm:$('#modal-confirm'),
-  statusIndicator:$('#status-indicator')
+  statusIndicator:$('#status-indicator'),qualityBanner:$('#quality-banner')
 };
 let currentFileId=null,currentReport=null,radarChart=null,trendChart=null,deleteTargetId=null;
 let progressTimer=null,currentProgress=0,targetProgress=0;
@@ -313,8 +328,9 @@ function handleUpload(file){
   if(!['.mp4','.mov','.avi','.mkv'].includes(ext)){showToast('仅支持 MP4 / MOV / AVI / MKV','error');return}
   dom.progressSection.classList.add('visible');dom.resultsSection.classList.remove('visible');
   dom.uploadZone.classList.add('hidden');
+  dom.actionType.disabled=true;
   dom.progressStatus.textContent='上传中';startProgress();
-  const fd=new FormData();fd.append('file',file);
+  const fd=new FormData();fd.append('file',file);fd.append('action_type',dom.actionType.value);
   const xhr=new XMLHttpRequest();xhr.open('POST','/upload');
   xhr.upload.addEventListener('progress',e=>{if(e.lengthComputable){setTargetProgress(Math.round(e.loaded/e.total*30))}});
   xhr.addEventListener('load',()=>{
@@ -343,7 +359,7 @@ function handleUpload(file){
   xhr.timeout=120000;
   xhr.send(fd);
 }
-function resetUpload(){dom.progressSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');if(progressTimer)cancelAnimationFrame(progressTimer)}
+function resetUpload(){dom.progressSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');dom.actionType.disabled=false;if(progressTimer)cancelAnimationFrame(progressTimer)}
 
 function computeDimensions(report){
   // V3 动力链：后端已算好，直接取
@@ -366,16 +382,26 @@ function computeDimensions(report){
 }
 function _avg(arr){return Math.round(arr.reduce((a,b)=>a+b,0)/arr.length)}
 function _grade(s){return s>=90?'A':s>=75?'B':s>=60?'C':'D'}
+function reportScore(report,dims){const value=Number((report.summary||{}).overall_score);return Number.isFinite(value)?Math.round(value):_avg(Object.values(dims))}
+function renderDataQuality(report){
+  const q=report.data_quality||{},score=Number(q.score),messages=q.messages||[];
+  if(!Number.isFinite(score)){dom.qualityBanner.className='quality-banner';dom.qualityBanner.innerHTML='';return}
+  const reliable=q.is_reliable!==false;
+  dom.qualityBanner.className='quality-banner visible'+(reliable?'':' low');
+  dom.qualityBanner.innerHTML='<div><strong>数据可信度 '+score+' 分 · '+(reliable?'可用于动作趋势分析':'结果仅供参考')+'</strong>'+(messages[0]||'')+'</div>';
+}
 
 function generateAISummary(dims,av,g){
   const entries=Object.entries(dims).sort((a,b)=>b[1]-a[1]),best=entries[0],weakOnes=entries.filter(e=>e[1]<75);
   const labels={A:'优秀',B:'良好',C:'一般',D:'需改善'},colors={A:'var(--green)',B:'var(--accent)',C:'var(--orange)',D:'var(--red)'};
   dom.aiScore.textContent=av+'分';dom.aiScore.style.color=colors[g];dom.aiGradeText.textContent='综合评级 '+g+' · '+labels[g];
   const advice={发力顺序:{low:'近端→远端发力顺序不完整，力量传递存在断裂。建议进行慢动作分解训练，逐环节校准胯→肩→肘→腕的启动时序。',high:'动力链发力顺序完整，力量从大肌群向末端高效传递。'},传导效率:{low:'相邻关节间能量传递时延较大，可能存在动作僵硬或多余发力。建议进行流畅性训练（如弹力带抗阻），减少环节间停顿。',high:'动力链传导高效流畅，各环节衔接紧密。'},末端爆发:{low:'末端关节（腕/踝）峰值速度相对近端较低，能量传递效率不足。建议加强末端爆发力训练（药球投掷、跳箱）。',high:'末端爆发力出色，速度放大效应明显。'},动作一致性:{low:'多次重复动作的关节角度曲线波动较大，动作稳定性需提高。建议进行等速训练和节奏控制，减少每次动作的变异度。',high:'动作重复一致性好，每次执行高度稳定。'},关节保护:{low:'部分关节在运动中超出安全角度范围，存在损伤风险。建议强化关节周围肌肉力量，必要时使用护具。',high:'关节运动范围安全，无明显超限风险。'},核心稳定:{low:'运动中躯干晃动幅度较大，核心控制力不足。建议增加平板支撑、死虫式等核心训练。',high:'核心稳定性良好，运动中躯干保持稳定。'},对称性:{low:'左右肢体发力不均衡，长期可能导致单侧过度使用损伤。建议弱侧增加 10–15% 训练量。',high:'左右对称性良好，双侧肌力均衡。'},关节活动度:{low:'关节活动范围受限，建议每天 10–15 分钟针对性拉伸。',high:'关节活动度充足，灵活性好。'},平衡能力:{low:'平衡感有待提升，建议每周 2–3 次平衡训练。',high:'平衡能力出色，本体感觉良好。'},动作流畅:{low:'动作过渡存在代偿，建议降低速度注重质量控制。',high:'动作流畅自然，运动控制力强。'},姿态控制:{low:'存在体态偏差趋势，建议关注日常姿势并配合矫正训练。',high:'姿态控制良好，脊柱中立位稳定。'},膝关节活动:{low:'膝关节活动范围不足，影响下肢力量输出和缓冲能力。建议进行深蹲渐进训练和腘绳肌拉伸。',high:'膝关节活动范围充分，下肢缓冲和发力能力良好。'},左右对称:{low:'左右下肢活动范围差异较大，存在单侧代偿风险。建议进行单腿训练修正弱侧。',high:'左右下肢对称性良好，双侧发力均衡。'},躯干控制:{low:'运动中躯干前倾过大，腰椎负荷增加。建议加强核心训练并保持脊柱中立。',high:'躯干控制良好，运动中保持脊柱稳定。'},动作质量:{low:'动作不够流畅，存在顿挫或速度控制不佳。建议降低速度专注质量控制，使用节拍器引导节奏。',high:'动作质量优秀，速度曲线平滑、节奏稳定、爆发力充足。'}};
+  Object.assign(advice,{下蹲活动范围:{low:'本次膝关节活动范围低于深蹲参考目标，可先做徒手半蹲，逐步增加深度。',high:'本次下蹲活动范围达到参考目标。'},左右协调:{low:'左右两侧活动范围存在差异，建议减慢动作并对照原视频检查。',high:'本次左右两侧活动范围接近。'},动作平滑:{low:'角度曲线中出现较多方向变化，建议使用稳定节奏重新完成动作。',high:'本次动作角度曲线较平滑。'},节奏控制:{low:'下蹲和起身阶段时长差异较大，可使用稳定节拍练习。',high:'本次下蹲与起身节奏较均衡。'},重复一致性:{low:'不同重复之间的深度或时长有差异，建议固定站位和节拍。',high:'多次动作的深度和时长较一致。'},动作幅度:{low:'本次动作幅度较小，请结合动作目标判断是否需要增加范围。',high:'本次主要关节有清晰的活动范围。'}});
+  const fallback={low:'这一项低于当前动作的参考目标，建议先降低速度，保持全身入镜后重新分析。',high:'这一项在本次二维视频分析中表现稳定。'};
   let h='<div style="margin-bottom:8px;line-height:1.8">';
   h+='您的整体姿态表现<strong style="color:'+(g==='A'||g==='B'?'var(--accent)':'var(--orange)')+'">'+labels[g]+'</strong>（'+av+'分）';
-  h+='<br><br><span style="color:var(--green);font-weight:600">● 优势</span>：「'+best[0]+'」'+best[1]+'分，'+advice[best[0]].high;
-  if(weakOnes.length){h+='<br><br><span style="color:var(--orange);font-weight:600">● 改善重点</span>：';weakOnes.forEach(w=>{h+='<br><span class="ai-highlight '+(w[1]>=60?'ai-hl-warn':'ai-hl-bad')+'">'+w[0]+' '+w[1]+'分</span> '+advice[w[0]].low})}
+  h+='<br><br><span style="color:var(--green);font-weight:600">● 优势</span>：「'+best[0]+'」'+best[1]+'分，'+(advice[best[0]]||fallback).high;
+  if(weakOnes.length){h+='<br><br><span style="color:var(--orange);font-weight:600">● 改善重点</span>：';weakOnes.forEach(w=>{h+='<br><span class="ai-highlight '+(w[1]>=60?'ai-hl-warn':'ai-hl-bad')+'">'+w[0]+' '+w[1]+'分</span> '+(advice[w[0]]||fallback).low})}
   h+='<br><br><span style="color:var(--accent);font-weight:600">● 日常建议</span>：';
   h+='<br>· 训练前 5–10 分钟动态热身，训练后静态拉伸';
   h+='<br>· 每周 3 次以上力量+柔韧+平衡综合训练';
@@ -398,8 +424,9 @@ function renderRadar(dims){
 const EXERCISE_LINKS={'单腿硬拉':'https://search.bilibili.com/all?keyword=单腿硬拉+教学','单侧农夫行走':'https://search.bilibili.com/all?keyword=农夫行走+教学','弹力带单臂推举':'https://search.bilibili.com/all?keyword=弹力带单臂推举+教学','猫牛式脊柱流动':'https://search.bilibili.com/all?keyword=猫牛式+教学','肩关节绕环':'https://search.bilibili.com/all?keyword=肩关节绕环+教学','髋关节 90/90 拉伸':'https://search.bilibili.com/all?keyword=髋关节9090拉伸+教学','死虫式':'https://search.bilibili.com/all?keyword=死虫式+训练','平板支撑':'https://search.bilibili.com/all?keyword=平板支撑+教学','鸟狗式':'https://search.bilibili.com/all?keyword=鸟狗式+训练','单腿站立':'https://search.bilibili.com/all?keyword=单腿站立+平衡训练','BOSU球深蹲':'https://search.bilibili.com/all?keyword=BOSU球深蹲+教学','闭眼站立训练':'https://search.bilibili.com/all?keyword=闭眼站立+平衡训练','慢速深蹲':'https://search.bilibili.com/all?keyword=慢速深蹲+控制训练','弓步转体':'https://search.bilibili.com/all?keyword=弓步转体+教学','爬行训练':'https://search.bilibili.com/all?keyword=爬行训练+教学','墙壁天使':'https://search.bilibili.com/all?keyword=墙壁天使+训练','靠墙站立':'https://search.bilibili.com/all?keyword=靠墙站立+矫正','弹力带划船':'https://search.bilibili.com/all?keyword=弹力带划船+教学','慢动作分解训练':'https://search.bilibili.com/all?keyword=发力顺序+训练','弹力带抗阻挥臂':'https://search.bilibili.com/all?keyword=弹力带抗阻+挥臂+训练','单腿臀桥':'https://search.bilibili.com/all?keyword=单腿臀桥+教学','连续药球下砸':'https://search.bilibili.com/all?keyword=药球下砸+训练','快速弹力带划船':'https://search.bilibili.com/all?keyword=弹力带划船+爆发力','跳绳双摇':'https://search.bilibili.com/all?keyword=跳绳+双摇+教学','双手药球前推':'https://search.bilibili.com/all?keyword=药球前推+爆发力','负重跳箱':'https://search.bilibili.com/all?keyword=负重跳箱+教学','快速俯卧撑击掌':'https://search.bilibili.com/all?keyword=击掌俯卧撑+爆发力','节拍器引导深蹲':'https://search.bilibili.com/all?keyword=深蹲+节奏+控制','等速弹力带卧推':'https://search.bilibili.com/all?keyword=弹力带卧推+教学','镜前动作模仿训练':'https://search.bilibili.com/all?keyword=动作模仿+训练','股四头肌离心强化':'https://search.bilibili.com/all?keyword=股四头肌+离心+训练','腘绳肌北欧降':'https://search.bilibili.com/all?keyword=北欧降+腘绳肌+教学','肩袖肌群弹力带训练':'https://search.bilibili.com/all?keyword=肩袖肌群+弹力带+训练','不稳定面平板支撑':'https://search.bilibili.com/all?keyword=不稳定面+平板支撑','农夫行走':'https://search.bilibili.com/all?keyword=农夫行走+教学','悬吊带抗旋':'https://search.bilibili.com/all?keyword=悬吊带+抗旋+训练'};
 function makeExerciseLink(text){for(const[name,url]of Object.entries(EXERCISE_LINKS)){if(text.includes(name))return text.replace(name,'<a href="'+url+'" target="_blank" class="ex-link" title="查看「'+name+'」教学视频">'+name+'</a>')}return text}
 const RX={'发力顺序':{issue:'动力链顺序断裂',ex:['慢动作分解训练（逐环节校准）3×10次','弹力带抗阻挥臂 3×12次（每侧）','单腿臀桥（髋-膝-踝联动）3×12次']},'传导效率':{issue:'能量传递时延过大',ex:['连续药球下砸 3×15次','快速弹力带划船 3×20次','跳绳双摇 3×1分钟']},'末端爆发':{issue:'末端速度不足',ex:['双手药球前推 3×12次','负重跳箱 3×8次','快速俯卧撑击掌 3×10次']},'动作一致性':{issue:'重复动作变异度大',ex:['节拍器引导深蹲（固定节奏）3×15次','等速弹力带卧推 3×12次','镜前动作模仿训练 3×10次（每侧）']},'关节保护':{issue:'关节超安全范围',ex:['股四头肌离心强化 3×12次','腘绳肌北欧降 3×8次','肩袖肌群弹力带训练 3×15次']},'核心稳定':{issue:'躯干晃动过大',ex:['不稳定面平板支撑 3×45秒','农夫行走 3×20米','悬吊带抗旋 3×12次（每侧）']}};
+Object.assign(RX,{下蹲活动范围:{issue:'活动范围低于参考目标',ex:['徒手半蹲 3×10次，动作稳定后逐步加深','踝关节活动练习 2×10次']},左右协调:{issue:'左右活动范围有差异',ex:['降低速度完成徒手深蹲 3×8次','对照正面视频检查站位']},躯干控制:{issue:'躯干前倾较明显',ex:['靠墙深蹲 3×8次','死虫式 3×10次']},动作平滑:{issue:'角度曲线方向变化较多',ex:['使用节拍器完成慢速深蹲 3×8次']},节奏控制:{issue:'下蹲与起身节奏不均衡',ex:['采用 3 秒下蹲、1 秒停顿、2 秒起身的节奏练习']},重复一致性:{issue:'各次动作深度或时长不同',ex:['固定脚位连续完成 5 次徒手深蹲']},动作幅度:{issue:'主要关节活动幅度较小',ex:['确认动作目标后，逐步增加无痛活动范围']}});
 function renderPrescriptions(dims){
-  try{dom.prescriptionList.innerHTML='';const entries=Object.entries(dims).map(([n,s])=>({name:n,score:s})).sort((a,b)=>a.score-b.score);const weak=entries.filter(e=>e.score<75);if(!weak.length){dom.prescriptionList.innerHTML='<div class="presc-empty">所有指标均正常，无需额外运动处方。请继续保持！</div>';return}weak.forEach(({name,score},i)=>{const r=RX[name]||{issue:'需改善',ex:['建议咨询专业康复师进行个性化评估']},sc=score>=60?'warn':'bad';const c=document.createElement('div');c.className='presc-card'+(i<2?' open':'');c.innerHTML='<div class="presc-header"><div class="presc-title"><span class="presc-score '+sc+'">'+score+'</span><span>'+name+' · '+r.issue+'</span></div><span class="presc-arrow">&#9660;</span></div><div class="presc-body"><ul>'+r.ex.map(e=>'<li>'+makeExerciseLink(e)+'</li>').join('')+'</ul><div class="presc-footnote">建议每周训练 3–4 次，持续 4–6 周可见改善</div></div>';dom.prescriptionList.appendChild(c);c.querySelector('.presc-header').addEventListener('click',()=>c.classList.toggle('open'))})}catch(e){console.warn('Rx:',e)}
+  try{dom.prescriptionList.innerHTML='';const entries=Object.entries(dims).map(([n,s])=>({name:n,score:s})).sort((a,b)=>a.score-b.score);const weak=entries.filter(e=>e.score<75);if(!weak.length){dom.prescriptionList.innerHTML='<div class="presc-empty">本次没有低于参考目标的动作指标。</div>';return}weak.forEach(({name,score},i)=>{const r=RX[name]||{issue:'低于参考目标',ex:['降低动作速度并保持全身入镜后重新分析']},sc=score>=60?'warn':'bad';const c=document.createElement('div');c.className='presc-card'+(i<2?' open':'');c.innerHTML='<div class="presc-header"><div class="presc-title"><span class="presc-score '+sc+'">'+score+'</span><span>'+name+' · '+r.issue+'</span></div><span class="presc-arrow">&#9660;</span></div><div class="presc-body"><ul>'+r.ex.map(e=>'<li>'+makeExerciseLink(e)+'</li>').join('')+'</ul><div class="presc-footnote">建议结合数据可信度和原视频判断，不作为医疗结论</div></div>';dom.prescriptionList.appendChild(c);c.querySelector('.presc-header').addEventListener('click',()=>c.classList.toggle('open'))})}catch(e){console.warn('Rx:',e)}
 }
 
 function showResult(data){
@@ -419,9 +446,9 @@ function showResult(data){
     dom.btnDlReport.onclick=()=>downloadFile('/download/report/'+data.file_id,currentFileId+'_report.json');
     dom.sumTime.textContent=data.processing_time_sec??'--';dom.sumFrames.textContent=data.extracted_frames??'--';
     fetch('/preview/report/'+data.file_id).then(r=>r.json()).then(report=>{
-      currentReport=report;const dims=computeDimensions(report),av=_avg(Object.values(dims)),g=_grade(av);
+      currentReport=report;const dims=computeDimensions(report),av=reportScore(report,dims),g=_grade(av);
       dom.sumScore.textContent=av;dom.gradeBadge.textContent=g;dom.gradeBadge.className='grade-badge grade-'+g.toLowerCase();
-      generateAISummary(dims,av,g);renderRadar(dims);renderPrescriptions(dims);renderJointStats(report.joint_statistics||{});
+      renderDataQuality(report);generateAISummary(dims,av,g);renderRadar(dims);renderPrescriptions(dims);renderJointStats(report.joint_statistics||{});
       setTimeout(refreshReveal,100);
       try{gsap.from('.stat-value.accent',{textContent:0,duration:1.2,snap:{textContent:1},stagger:0.1,ease:'power2.out'});setTimeout(()=>{dom.sumTime.textContent=data.processing_time_sec??'--';dom.sumFrames.textContent=data.extracted_frames??'--';dom.sumScore.textContent=av},1300)}catch(e){}
     }).catch(()=>showToast('报告详情加载失败','error'));
@@ -429,12 +456,12 @@ function showResult(data){
   }catch(e){console.error('showResult:',e);showToast('渲染出错','error')}
 }
 
-const JOINT_ZH={left_elbow:'左肘关节',right_elbow:'右肘关节',left_knee:'左膝关节',right_knee:'右膝关节',left_hip:'左髋关节',right_hip:'右髋关节',left_ankle:'左踝关节',right_ankle:'右踝关节',trunk_flexion:'躯干前倾',neck_flexion:'颈部屈曲'};
+const JOINT_ZH={left_elbow:'左肘关节',right_elbow:'右肘关节',left_knee:'左膝关节',right_knee:'右膝关节',left_hip:'左髋关节',right_hip:'右髋关节',left_shank_inclination:'左小腿倾角',right_shank_inclination:'右小腿倾角',trunk_flexion:'躯干前倾',neck_flexion:'颈部偏移'};
 function renderJointStats(stats){
   try{dom.jointStatsBody.innerHTML='';const e=Object.entries(stats);if(!e.length){dom.jointStatsBody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">暂无数据</td></tr>';return}e.forEach(([n,s])=>{const tr=document.createElement('tr');tr.innerHTML='<td style="color:var(--text);font-weight:500">'+(JOINT_ZH[n]||n)+'</td><td>'+(s.min??'--')+'</td><td>'+(s.max??'--')+'</td><td>'+(s.mean??'--')+'</td><td>'+(s.std??'--')+'</td><td>'+(s.range??'--')+'</td>';dom.jointStatsBody.appendChild(tr)})}catch(e){}
 }
 
-dom.btnReanalyze.addEventListener('click',()=>{dom.resultsSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');dom.fileInput.value='';currentFileId=null;currentReport=null;if(radarChart){radarChart.destroy();radarChart=null}dom.prescriptionList.innerHTML='';dom.resultVideo.src='';window.scrollTo({top:0,behavior:'smooth'});showToast('已重置')});
+dom.btnReanalyze.addEventListener('click',()=>{dom.resultsSection.classList.remove('visible');dom.uploadZone.classList.remove('hidden');dom.actionType.disabled=false;dom.fileInput.value='';currentFileId=null;currentReport=null;if(radarChart){radarChart.destroy();radarChart=null}dom.prescriptionList.innerHTML='';dom.qualityBanner.className='quality-banner';dom.resultVideo.src='';window.scrollTo({top:0,behavior:'smooth'});showToast('已重置')});
 
 // ===== PDF EXPORT — new window + native print =====
 dom.btnExportPdf.addEventListener('click',()=>{
@@ -442,7 +469,7 @@ dom.btnExportPdf.addEventListener('click',()=>{
     if(!currentReport){showToast('无数据','error');return}
     dom.btnExportPdf.textContent='准备中…';
 
-    const dims=computeDimensions(currentReport),av=_avg(Object.values(dims)),g=_grade(av);
+    const dims=computeDimensions(currentReport),av=reportScore(currentReport,dims),g=_grade(av);
     const radarCanvas=document.getElementById('radar-chart');
     const radarDataUrl=radarCanvas?radarCanvas.toDataURL('image/png'):'';
 
@@ -451,15 +478,15 @@ dom.btnExportPdf.addEventListener('click',()=>{
     const entries=Object.entries(dims).sort((a,b)=>a[1]-b[1]).filter(e=>e[1]<75);
     let rxHtml='';
     entries.forEach(([name,score])=>{
-      const r=RX_local[name]||{issue:'需改善',ex:['建议咨询专业康复师']};
+      const r=RX_local[name]||{issue:'低于参考目标',ex:['降低动作速度并保持全身入镜后重新分析']};
       rxHtml+='<div style="margin-bottom:10px;padding:14px 18px;background:#f9f9fb;border-radius:10px;border-left:4px solid '+(score>=60?'#ff9500':'#ff3b30')+'"><div style="font-size:15px;font-weight:600;margin-bottom:8px"><span style="display:inline-block;min-width:34px;height:34px;border-radius:8px;background:'+(score>=60?'#ff9500':'#ff3b30')+';color:#fff;text-align:center;line-height:34px;font-size:15px;margin-right:10px">'+score+'</span>'+name+' · '+r.issue+'</div><ul style="list-style:none;padding:0 0 0 44px;font-size:13px;line-height:2.2;color:#555">'+r.ex.map(e=>'<li>▸ '+makeExerciseLink(e)+'</li>').join('')+'</ul></div>';
     });
-    if(!rxHtml)rxHtml='<div style="text-align:center;padding:30px;color:#34c759;font-size:15px;font-weight:500">所有指标均正常，无需额外运动处方。</div>';
+    if(!rxHtml)rxHtml='<div style="text-align:center;padding:30px;color:#34c759;font-size:15px;font-weight:500">本次没有低于参考目标的动作指标。</div>';
 
     const meta=currentReport.report_meta||{},summary=currentReport.summary||{},jStats=currentReport.joint_statistics||{};
     let tableRows='',dimRows='';
     Object.entries(jStats).slice(0,12).forEach(([k,v])=>{tableRows+='<tr><td>'+k+'</td><td>'+(v.min??'—')+'</td><td>'+(v.max??'—')+'</td><td>'+(v.mean??'—')+'</td><td>'+(v.std??'—')+'</td></tr>'});
-    Object.entries(dims).forEach(([k,v])=>{const gv=v>=75?'A':v>=60?'B':v>=60?'C':'D';dimRows+='<tr><td>'+k+'</td><td><b>'+v+'</b></td><td style="color:'+(v>=75?'#34c759':v>=60?'#ff9500':'#ff3b30')+'"><b>'+gv+'</b></td></tr>'});
+    Object.entries(dims).forEach(([k,v])=>{const gv=_grade(v);dimRows+='<tr><td>'+k+'</td><td><b>'+v+'</b></td><td style="color:'+(v>=75?'#34c759':v>=60?'#ff9500':'#ff3b30')+'"><b>'+gv+'</b></td></tr>'});
 
     const gradeColor=g==='A'?'#34c759':g==='B'?'#0071e3':g==='C'?'#ff9500':'#ff3b30';
 
@@ -467,7 +494,8 @@ dom.btnExportPdf.addEventListener('click',()=>{
 
     const w=window.open('','_blank','width=820,height=700');
     if(!w){showToast('请允许弹出窗口','error');dom.btnExportPdf.textContent='导出 PDF 报告';return}
-    w.document.write(html);w.document.close();
+    const printableHtml=html.replaceAll('运动处方','改进建议').replaceAll('异常事件','测量告警').replace('Pose Analysis System v2.0','Pose Analysis System v4.0');
+    w.document.write(printableHtml);w.document.close();
     // Auto open print dialog after images load
     w.onload=()=>{setTimeout(()=>{w.print();dom.btnExportPdf.textContent='导出 PDF 报告';showToast('请在打印对话框中选择「另存为 PDF」')},600)};
   }catch(e){console.warn('PDF:',e);showToast('导出失败','error');dom.btnExportPdf.textContent='导出 PDF 报告'}
@@ -500,9 +528,9 @@ async function previewReport(fileId){
     dom.btnDlSkeleton.onclick=()=>downloadFile(skelUrl,fileId+'_skeleton.mp4');
     dom.btnDlReport.onclick=()=>downloadFile('/download/report/'+fileId,fileId+'_report.json');
     const meta=data.report_meta||{};dom.sumTime.textContent=meta.duration_sec??'--';dom.sumFrames.textContent=meta.total_frames??'--';
-    const dims=computeDimensions(data),av=_avg(Object.values(dims)),g=_grade(av);
+    const dims=computeDimensions(data),av=reportScore(data,dims),g=_grade(av);
     dom.sumScore.textContent=av;dom.gradeBadge.textContent=g;dom.gradeBadge.className='grade-badge grade-'+g.toLowerCase();
-    generateAISummary(dims,av,g);renderRadar(dims);renderPrescriptions(dims);renderJointStats(data.joint_statistics||{});
+    renderDataQuality(data);generateAISummary(dims,av,g);renderRadar(dims);renderPrescriptions(dims);renderJointStats(data.joint_statistics||{});
     setTimeout(refreshReveal,100);setTimeout(()=>dom.resultsSection.scrollIntoView({behavior:'smooth'}),200);showToast('报告已加载');
   }catch(e){showToast('加载失败','error')}
 }

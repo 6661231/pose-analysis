@@ -1,223 +1,330 @@
 import json
-import numpy as np
-from pathlib import Path
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass, asdict
-from datetime import datetime
 import logging
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
-from pose_engine import KineticChainAnalyzer
+import numpy as np
+
+from movement_analyzer import ACTION_LABELS, SUPPORTED_ACTIONS, assess_movement
+from pose_engine import PoseEngine
+from pose_processing import json_safe_keypoints, process_pose_sequence
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class FrameMetrics:
+class RawFrame:
     frame_idx: int
     timestamp_sec: float
-    joint_angles: Dict[str, float]
-    limb_offsets: Dict[str, float]
-    keypoints: List[List[float]]  # 17 x 3，JSON 可序列化
+    keypoints: Optional[List[List[float]]]
+
+
+def _nullable_number(value: float, digits: int = 3) -> Optional[float]:
+    return round(float(value), digits) if np.isfinite(value) else None
 
 
 class PoseReportGenerator:
-    """
-    姿态数据分析报告生成器
-    聚合多帧量化数据，输出包含统计摘要、时序曲线、动作阶段、异常告警的 JSON
-    """
+    """Collect raw observations and produce one cleaned, time-aligned report."""
 
-    def __init__(self):
-        self.frames: List[FrameMetrics] = []
+    def __init__(
+        self,
+        action_type: str = "squat",
+        confidence_threshold: float = 0.3,
+        max_gap_frames: int = 2,
+    ):
+        self.action_type = action_type if action_type in SUPPORTED_ACTIONS else "general"
+        self.confidence_threshold = confidence_threshold
+        self.max_gap_frames = max_gap_frames
+        self.frames: List[RawFrame] = []
+        self.engine = PoseEngine()
 
     def add_frame(
         self,
         frame_idx: int,
         timestamp: float,
-        angles: Dict[str, float],
-        offsets: Dict[str, float],
-        keypoints: np.ndarray
-    ):
-        """添加单帧分析数据（自动清洗 NaN）"""
-        self.frames.append(FrameMetrics(
-            frame_idx=frame_idx,
-            timestamp_sec=round(timestamp, 3),
-            joint_angles={k: round(v, 2) if v == v else 0.0 for k, v in angles.items()},
-            limb_offsets={k: round(v, 4) if v == v else 0.0 for k, v in offsets.items()},
-            keypoints=np.nan_to_num(keypoints, nan=0.0).tolist()
+        angles: Optional[Dict[str, float]] = None,
+        offsets: Optional[Dict[str, float]] = None,
+        keypoints: Optional[np.ndarray] = None,
+    ) -> None:
+        """Store raw detector output. Angles/offsets remain accepted for API compatibility."""
+        del angles, offsets
+        points = None
+        if keypoints is not None:
+            array = np.asarray(keypoints, dtype=np.float64)
+            if array.shape == (17, 3):
+                points = array.tolist()
+        self.frames.append(RawFrame(
+            frame_idx=int(frame_idx),
+            timestamp_sec=round(float(timestamp), 6),
+            keypoints=points,
         ))
 
     @staticmethod
-    def _stats(values: List[float]) -> Dict[str, Optional[float]]:
-        """数值列表统计量"""
-        arr = np.array([v for v in values if not np.isnan(v)])
-        if len(arr) == 0:
-            return {"min": None, "max": None, "mean": None, "std": None, "range": None}
+    def _stats(values: Sequence[float]) -> Dict[str, Optional[float]]:
+        array = np.asarray(values, dtype=np.float64)
+        array = array[np.isfinite(array)]
+        if len(array) == 0:
+            return {"min": None, "max": None, "mean": None, "std": None, "range": None, "valid_count": 0}
         return {
-            "min": round(float(np.min(arr)), 2),
-            "max": round(float(np.max(arr)), 2),
-            "mean": round(float(np.mean(arr)), 2),
-            "std": round(float(np.std(arr)), 2),
-            "range": round(float(np.max(arr) - np.min(arr)), 2)
+            "min": round(float(np.min(array)), 2),
+            "max": round(float(np.max(array)), 2),
+            "mean": round(float(np.mean(array)), 2),
+            "std": round(float(np.std(array)), 2),
+            "range": round(float(np.max(array) - np.min(array)), 2),
+            "valid_count": int(len(array)),
         }
 
-    def _action_phases(self, values: List[float], timestamps: List[float], joint_name: str) -> List[Dict]:
-        """
-        基于角度变化率划分动作阶段：屈曲(flexion) / 伸展(extension) / 静止(hold)
-        """
-        phases = []
-        if len(values) < 3:
+    @staticmethod
+    def _aligned_series(metric_rows: List[Dict[str, float]]) -> Dict[str, List[float]]:
+        keys = sorted({key for row in metric_rows for key in row})
+        return {
+            key: [float(row.get(key, np.nan)) for row in metric_rows]
+            for key in keys
+        }
+
+    @staticmethod
+    def _action_phases(
+        values: Sequence[float],
+        timestamps: Sequence[float],
+        joint_name: str,
+    ) -> List[Dict]:
+        values_array = np.asarray(values, dtype=np.float64)
+        time_array = np.asarray(timestamps, dtype=np.float64)
+        phases: List[Dict] = []
+        if len(values_array) < 3:
             return phases
 
-        diffs = np.diff(values)
-        state = "hold"
-        start_i = 0
+        current_state: Optional[str] = None
+        start_index = 0
+        for index in range(1, len(values_array)):
+            if not np.isfinite(values_array[index - 1:index + 1]).all():
+                state = "unknown"
+            else:
+                dt = max(float(time_array[index] - time_array[index - 1]), 1e-3)
+                velocity = float(values_array[index] - values_array[index - 1]) / dt
+                state = "flexion" if velocity < -8 else ("extension" if velocity > 8 else "hold")
 
-        for i, d in enumerate(diffs):
-            new_state = "flexion" if d < -3 else ("extension" if d > 3 else "hold")
-            if new_state != state:
-                if i - start_i >= 1:
+            if current_state is None:
+                current_state = state
+                start_index = index - 1
+                continue
+            if state != current_state:
+                duration = float(time_array[index - 1] - time_array[start_index])
+                if current_state != "unknown" and duration >= 0.1:
                     phases.append({
-                        "phase_type": state,
-                        "start_time_sec": round(timestamps[start_i], 2),
-                        "end_time_sec": round(timestamps[i], 2),
-                        "duration_sec": round(timestamps[i] - timestamps[start_i], 2),
-                        "joint": joint_name
+                        "phase_type": current_state,
+                        "start_time_sec": round(float(time_array[start_index]), 3),
+                        "end_time_sec": round(float(time_array[index - 1]), 3),
+                        "duration_sec": round(duration, 3),
+                        "joint": joint_name,
                     })
-                state = new_state
-                start_i = i
+                current_state = state
+                start_index = index - 1
 
-        # 收尾
-        if start_i < len(timestamps) - 1:
+        duration = float(time_array[-1] - time_array[start_index])
+        if current_state not in {None, "unknown"} and duration >= 0.1:
             phases.append({
-                "phase_type": state,
-                "start_time_sec": round(timestamps[start_i], 2),
-                "end_time_sec": round(timestamps[-1], 2),
-                "duration_sec": round(timestamps[-1] - timestamps[start_i], 2),
-                "joint": joint_name
+                "phase_type": current_state,
+                "start_time_sec": round(float(time_array[start_index]), 3),
+                "end_time_sec": round(float(time_array[-1]), 3),
+                "duration_sec": round(duration, 3),
+                "joint": joint_name,
             })
-
         return phases
 
-    def _anomaly_detection(
-        self,
+    @staticmethod
+    def _velocity_series(
         angle_series: Dict[str, List[float]],
-        timestamps: List[float]
+        timestamps: Sequence[float],
+    ) -> Dict[str, List[Optional[float]]]:
+        time_array = np.asarray(timestamps, dtype=np.float64)
+        output: Dict[str, List[Optional[float]]] = {}
+        if len(time_array) < 2:
+            return output
+        dt = np.diff(time_array)
+        for joint, values in angle_series.items():
+            array = np.asarray(values, dtype=np.float64)
+            velocity = np.full(max(len(array) - 1, 0), np.nan)
+            valid = np.isfinite(array[:-1]) & np.isfinite(array[1:]) & (dt > 0)
+            velocity[valid] = np.diff(array)[valid] / dt[valid]
+            output[joint] = [_nullable_number(value, 2) for value in velocity]
+        return output
+
+    @staticmethod
+    def _measurement_alerts(
+        angle_series: Dict[str, List[float]],
+        timestamps: Sequence[float],
+        relevant_joints: Optional[set] = None,
     ) -> List[Dict]:
-        """异常姿态检测：超限、突变、不对称"""
-        alerts = []
-
-        # 关节安全范围（示例阈值，可按动作类型动态配置）
-        SAFE_RANGES = {
-            "left_knee": (5, 175),
-            "right_knee": (5, 175),
-            "left_elbow": (5, 175),
-            "right_elbow": (5, 175),
-            "trunk_flexion": (0, 80),
-            "neck_flexion": (0, 70)
-        }
-
-        # 范围超限检测
-        for joint, vals in angle_series.items():
-            safe = SAFE_RANGES.get(joint)
-            if not safe:
+        """Flag likely measurement jumps; this is not a medical safety assessment."""
+        time_array = np.asarray(timestamps, dtype=np.float64)
+        alerts: List[Dict] = []
+        if len(time_array) < 2:
+            return alerts
+        dt = np.diff(time_array)
+        for joint, values in angle_series.items():
+            if relevant_joints is not None and joint not in relevant_joints:
                 continue
-            for i, v in enumerate(vals):
-                if v < safe[0] or v > safe[1]:
-                    alerts.append({
-                        "type": "joint_range_exceeded",
-                        "joint": joint,
-                        "timestamp_sec": round(timestamps[i], 2),
-                        "value_deg": round(v, 2),
-                        "safe_range": safe,
-                        "severity": "warning" if v < safe[1] + 10 else "critical"
-                    })
-
-        # 帧间突变检测 (> 15°/帧 视为异常抖动或快速动作)
-        for joint, vals in angle_series.items():
-            diffs = np.abs(np.diff(vals))
-            for i, d in enumerate(diffs):
-                if d > 15:
-                    alerts.append({
-                        "type": "sudden_angle_change",
-                        "joint": joint,
-                        "timestamp_sec": round(timestamps[i + 1], 2),
-                        "delta_deg": round(float(d), 2),
-                        "severity": "warning"
-                    })
-
+            array = np.asarray(values, dtype=np.float64)
+            valid = np.isfinite(array[:-1]) & np.isfinite(array[1:]) & (dt > 0)
+            speeds = np.full(len(dt), np.nan)
+            speeds[valid] = np.abs(np.diff(array)[valid] / dt[valid])
+            for index in np.flatnonzero(speeds > 500):
+                alerts.append({
+                    "type": "possible_measurement_jump",
+                    "joint": joint,
+                    "timestamp_sec": round(float(time_array[index + 1]), 3),
+                    "angular_speed_deg_s": round(float(speeds[index]), 2),
+                    "severity": "data_quality",
+                })
         return alerts
 
     def generate(self, video_info: Optional[Dict] = None) -> Dict[str, Any]:
-        """生成完整 JSON 报告字典"""
         if not self.frames:
-            return {"error": "无有效帧数据"}
+            return {"error": "无抽样帧数据"}
 
-        timestamps = [f.timestamp_sec for f in self.frames]
+        ordered_frames = sorted(self.frames, key=lambda frame: frame.frame_idx)
+        raw_timestamps = np.asarray(
+            [frame.timestamp_sec for frame in ordered_frames],
+            dtype=np.float64,
+        )
+        positive_intervals = np.diff(raw_timestamps)
+        positive_intervals = positive_intervals[positive_intervals > 0]
+        fallback_interval = float(np.median(positive_intervals)) if len(positive_intervals) else 0.1
+        timestamp_corrections = 0
+        if not np.isfinite(raw_timestamps[0]):
+            raw_timestamps[0] = 0.0
+            timestamp_corrections += 1
+        for index in range(1, len(raw_timestamps)):
+            if not np.isfinite(raw_timestamps[index]) or raw_timestamps[index] <= raw_timestamps[index - 1]:
+                raw_timestamps[index] = raw_timestamps[index - 1] + fallback_interval
+                timestamp_corrections += 1
+        timestamps = raw_timestamps.tolist()
+        raw_keypoints = [frame.keypoints for frame in ordered_frames]
+        processed = process_pose_sequence(
+            raw_keypoints,
+            timestamps,
+            confidence_threshold=self.confidence_threshold,
+            max_gap_frames=self.max_gap_frames,
+        )
 
-        # 按关节聚合时序
-        angle_series: Dict[str, List[float]] = {}
-        offset_series: Dict[str, List[float]] = {}
-        for f in self.frames:
-            for k, v in f.joint_angles.items():
-                angle_series.setdefault(k, []).append(v)
-            for k, v in f.limb_offsets.items():
-                offset_series.setdefault(k, []).append(v)
+        sample_rate = 0.0
+        if len(timestamps) > 1:
+            intervals = np.diff(np.asarray(timestamps, dtype=np.float64))
+            valid_intervals = intervals[intervals > 0]
+            if len(valid_intervals):
+                sample_rate = float(1.0 / np.median(valid_intervals))
 
-        # 统计摘要
-        joint_stats = {k: self._stats(v) for k, v in angle_series.items()}
-        offset_stats = {k: self._stats(v) for k, v in offset_series.items()}
+        angle_rows = [self.engine.compute_joint_angles(points) for points in processed.keypoints]
+        offset_rows = [self.engine.compute_limb_offsets(points) for points in processed.keypoints]
+        angle_series = self._aligned_series(angle_rows)
+        offset_series = self._aligned_series(offset_rows)
 
-        # 动作阶段（以膝关节为主）
-        phases = []
-        for jname in ["left_knee", "right_knee"]:
-            if jname in angle_series:
-                phases.extend(self._action_phases(angle_series[jname], timestamps, jname))
+        joint_stats = {name: self._stats(values) for name, values in angle_series.items()}
+        offset_stats = {name: self._stats(values) for name, values in offset_series.items()}
+        phases: List[Dict] = []
+        for joint in ["left_knee", "right_knee"]:
+            if joint in angle_series:
+                phases.extend(self._action_phases(angle_series[joint], timestamps, joint))
 
-        # 异常检测
-        anomalies = self._anomaly_detection(angle_series, timestamps)
+        assessment = assess_movement(self.action_type, angle_series, timestamps)
+        quality = processed.quality.as_dict()
+        quality["timestamp_corrections"] = timestamp_corrections
+        if timestamp_corrections:
+            quality["messages"].append(
+                f"视频时间戳有 {timestamp_corrections} 处重复或倒退，已按帧顺序修正。"
+            )
+        minimum_temporal_fps = 15.0 if self.action_type == "throw" else 8.0
+        quality["temporal_resolution_ok"] = sample_rate >= minimum_temporal_fps
+        quality["minimum_recommended_fps"] = minimum_temporal_fps
+        if not quality["temporal_resolution_ok"]:
+            quality["score"] = min(quality["score"], 55)
+            quality["level"] = "low"
+            quality["is_reliable"] = False
+            quality["messages"].insert(
+                0,
+                f"实际分析帧率仅 {sample_rate:.1f} FPS，低于该动作建议的 {minimum_temporal_fps:.0f} FPS。",
+            )
+        assessment["observations"] = quality["messages"] + assessment["observations"]
+        relevant_alert_joints = None
+        if self.action_type == "squat":
+            relevant_alert_joints = {
+                "left_knee",
+                "right_knee",
+                "left_hip",
+                "right_hip",
+                "trunk_flexion",
+                "neck_flexion",
+            }
+        alerts = self._measurement_alerts(
+            angle_series,
+            timestamps,
+            relevant_joints=relevant_alert_joints,
+        )
 
-        # ===== 动力链分析（新算法 V3）=====
-        keypoints_all = [np.array(f.keypoints) for f in self.frames]
-        kca = KineticChainAnalyzer(angle_series, timestamps, keypoints_all)
-        chain_result = kca.full_assessment()
-
-        # 角速度时序（供前端画图）
-        velocity_series = {}
-        for joint in ["right_hip", "right_knee", "right_ankle", "right_shoulder", "right_elbow", "right_wrist"]:
-            if joint in kca.velocities:
-                velocity_series[joint] = kca.velocities[joint]
+        frame_data = []
+        for index, frame in enumerate(ordered_frames):
+            interpolated_indices = np.flatnonzero(
+                processed.interpolated_mask[index, :, :2].any(axis=1)
+            ).astype(int).tolist()
+            frame_data.append({
+                "frame_idx": frame.frame_idx,
+                "timestamp_sec": round(float(timestamps[index]), 3),
+                "detected": frame.keypoints is not None,
+                "interpolated_keypoint_indices": interpolated_indices,
+                "joint_angles": {
+                    key: _nullable_number(value, 2)
+                    for key, value in angle_rows[index].items()
+                },
+                "limb_offsets": {
+                    key: _nullable_number(value, 4)
+                    for key, value in offset_rows[index].items()
+                },
+                "keypoints": json_safe_keypoints(processed.keypoints[index]),
+            })
 
         report = {
             "report_meta": {
                 "generated_at": datetime.now().isoformat(),
-                "version": "3.0.0",
-                "engine": "YOLOv8-Pose + KineticChain V3",
-                "total_frames": len(self.frames),
-                "duration_sec": round(timestamps[-1] - timestamps[0], 2) if len(timestamps) > 1 else 0
+                "version": "4.0.0",
+                "engine": "YOLOv8-Pose + confidence-aware temporal analysis",
+                "action_type": self.action_type,
+                "action_label": ACTION_LABELS[self.action_type],
+                "total_frames": len(ordered_frames),
+                "detected_frames": quality["detected_frames"],
+                "duration_sec": round(timestamps[-1] - timestamps[0], 2) if len(timestamps) > 1 else 0,
+                "sample_rate_fps": round(sample_rate, 2),
             },
             "video_info": video_info or {},
+            "data_quality": quality,
             "summary": {
-                "overall_score": chain_result["overall_score"],
-                "dimensions": chain_result["dimensions"],
-                "anomaly_count": len(anomalies),
-                "action_phase_count": len(phases)
+                "overall_score": assessment["overall_score"],
+                "dimensions": assessment["dimensions"],
+                "is_reliable": quality["is_reliable"],
+                "quality_score": quality["score"],
+                "measurement_alert_count": len(alerts),
+                "anomaly_count": len(alerts),
+                "action_phase_count": len(phases),
+                "repetition_count": len(assessment["repetitions"]),
             },
-            "chain_details": chain_result["chain_details"],
-            "velocity_series": velocity_series,
+            "movement_assessment": assessment,
+            "chain_details": {},
+            "velocity_series": self._velocity_series(angle_series, timestamps),
             "joint_statistics": joint_stats,
             "offset_statistics": offset_stats,
             "action_phases": phases,
-            "anomalies": anomalies,
-            "frame_data": [asdict(f) for f in self.frames]
+            "anomalies": alerts,
+            "frame_data": frame_data,
+            "disclaimer": "结果基于单目二维视频，仅用于动作趋势反馈，不构成医疗诊断、损伤风险结论或真实力学测量。",
         }
-
         return report
 
     def save(self, output_path: Path, video_info: Optional[Dict] = None) -> Dict[str, Any]:
-        """保存报告为 JSON 文件"""
         report = self.generate(video_info)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
-        logger.info(f"[Report] 报告已保存: {output_path} ({len(self.frames)} 帧)")
+        with open(output_path, "w", encoding="utf-8") as file:
+            json.dump(report, file, ensure_ascii=False, indent=2, allow_nan=False)
+        logger.info("[Report] 报告已保存: %s (%d 帧)", output_path, len(self.frames))
         return report
